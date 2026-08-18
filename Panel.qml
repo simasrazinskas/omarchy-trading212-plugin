@@ -43,6 +43,28 @@ Panel {
   readonly property bool needsSetup: service.keyMissing || service.authFailed
   readonly property string symbol: service.summary ? Model.currencySymbol(service.summary.currency) : ""
 
+  // Daily snapshots plus a live "now" point; re-derived whenever history or
+  // the summary changes, so the graph moves with each refresh.
+  readonly property var series: Model.graphSeries(service.history, service.summary ? service.summary.value : null, Date.now())
+
+  function nearestPoint(x, width) {
+    var s = series
+    if (s.points.length < 2) return -1
+    var span = s.lastTs - s.firstTs
+    if (span <= 0) span = 1
+    var best = -1
+    var bestDist = 1e9
+    for (var i = 0; i < s.points.length; i++) {
+      var px = (s.points[i].ts - s.firstTs) / span * (width - 2) + 1
+      var dist = Math.abs(px - x)
+      if (dist < bestDist) {
+        best = i
+        bestDist = dist
+      }
+    }
+    return best
+  }
+
   readonly property string statusText: {
     if (service.keyMissing) return "API KEY REQUIRED"
     if (service.authFailed) return service.lastError.toUpperCase()
@@ -197,7 +219,7 @@ Panel {
     open: root.opened
     focusTarget: keyCatcher
     contentWidth: panel.fittedContentWidth(Style.space(430))
-    contentHeight: panel.fittedContentHeight(fixedContent.implicitHeight + listContent.implicitHeight + Style.space(12), Style.space(560))
+    contentHeight: panel.fittedContentHeight(fixedContent.implicitHeight + listContent.implicitHeight + Style.space(12), Style.space(640))
 
     PanelKeyCatcher {
       id: keyCatcher
@@ -297,6 +319,141 @@ Panel {
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.body
                 }
+              }
+            }
+          }
+
+          // ---- Portfolio graph from local daily snapshots.
+          Column {
+            visible: !root.needsSetup && service.summary !== null
+            width: parent.width
+            spacing: Style.space(6)
+
+            Item {
+              width: parent.width
+              implicitHeight: graphTitle.implicitHeight
+
+              Text {
+                id: graphTitle
+                anchors.left: parent.left
+                text: "PORTFOLIO"
+                color: Qt.darker(root.foreground, 1.5)
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.bodySmall
+                font.letterSpacing: 1
+              }
+
+              Text {
+                anchors.right: parent.right
+                visible: root.series.points.length >= 2
+                text: {
+                  var s = root.series
+                  if (chart.hoverIndex >= 0 && chart.hoverIndex < s.points.length) {
+                    var p = s.points[chart.hoverIndex]
+                    var label = p.date === "" ? "NOW" : Qt.formatDate(new Date(p.ts), "d MMM").toUpperCase()
+                    return label + " · " + Model.formatFull(p.value, root.symbol)
+                  }
+                  var pct = s.changePct === null ? "" : " (" + Model.formatPercent(s.changePct) + ")"
+                  return Model.formatSigned(s.changeAbs, root.symbol) + pct
+                    + " · SINCE " + Qt.formatDate(new Date(s.firstTs), "d MMM").toUpperCase()
+                }
+                color: chart.hoverIndex >= 0 ? root.foreground : root.plColor(root.series.changeAbs)
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.bodySmall
+              }
+            }
+
+            Item {
+              width: parent.width
+              height: Style.space(84)
+
+              Canvas {
+                id: chart
+                anchors.fill: parent
+                property int hoverIndex: -1
+
+                onPaint: {
+                  var ctx = getContext("2d")
+                  ctx.clearRect(0, 0, width, height)
+                  var s = root.series
+                  var pts = s.points
+                  if (pts.length < 2) return
+
+                  var padY = 6
+                  var span = s.lastTs - s.firstTs
+                  if (span <= 0) span = 1
+                  var range = s.max - s.min
+                  if (range <= 0) range = Math.max(1, Math.abs(s.max) * 0.01)
+                  function px(ts) { return (ts - s.firstTs) / span * (width - 2) + 1 }
+                  function py(v) { return height - padY - (v - s.min) / range * (height - padY * 2) }
+
+                  var lineColor = s.changeAbs >= 0 ? root.profit : root.urgent
+
+                  ctx.beginPath()
+                  ctx.moveTo(px(pts[0].ts), py(pts[0].value))
+                  for (var i = 1; i < pts.length; i++) ctx.lineTo(px(pts[i].ts), py(pts[i].value))
+                  ctx.lineTo(px(pts[pts.length - 1].ts), height)
+                  ctx.lineTo(px(pts[0].ts), height)
+                  ctx.closePath()
+                  ctx.fillStyle = Qt.rgba(lineColor.r, lineColor.g, lineColor.b, 0.12)
+                  ctx.fill()
+
+                  ctx.beginPath()
+                  ctx.moveTo(px(pts[0].ts), py(pts[0].value))
+                  for (var j = 1; j < pts.length; j++) ctx.lineTo(px(pts[j].ts), py(pts[j].value))
+                  ctx.strokeStyle = lineColor
+                  ctx.lineWidth = 2
+                  ctx.lineJoin = "round"
+                  ctx.stroke()
+
+                  if (hoverIndex >= 0 && hoverIndex < pts.length) {
+                    var hx = px(pts[hoverIndex].ts)
+                    var hy = py(pts[hoverIndex].value)
+                    ctx.strokeStyle = Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.25)
+                    ctx.lineWidth = 1
+                    ctx.beginPath()
+                    ctx.moveTo(hx, 0)
+                    ctx.lineTo(hx, height)
+                    ctx.stroke()
+                    ctx.fillStyle = lineColor
+                    ctx.beginPath()
+                    ctx.arc(hx, hy, 3, 0, Math.PI * 2)
+                    ctx.fill()
+                  }
+                }
+
+                onHoverIndexChanged: requestPaint()
+                onWidthChanged: requestPaint()
+                onHeightChanged: requestPaint()
+                onVisibleChanged: if (visible) requestPaint()
+
+                Connections {
+                  target: root
+                  function onSeriesChanged() { chart.requestPaint() }
+                  function onProfitChanged() { chart.requestPaint() }
+                  function onForegroundChanged() { chart.requestPaint() }
+                  function onUrgentChanged() { chart.requestPaint() }
+                }
+              }
+
+              MouseArea {
+                anchors.fill: parent
+                hoverEnabled: true
+                onPositionChanged: function(mouse) { chart.hoverIndex = root.nearestPoint(mouse.x, chart.width) }
+                onExited: chart.hoverIndex = -1
+              }
+
+              Text {
+                visible: root.series.points.length < 2
+                anchors.centerIn: parent
+                width: parent.width
+                text: "Recording daily snapshots — the graph builds up from here."
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.bodySmall
+                font.italic: true
+                horizontalAlignment: Text.AlignHCenter
+                wrapMode: Text.Wrap
               }
             }
           }

@@ -15,10 +15,10 @@ Built for the Omarchy 4.x shell (`omarchy-shell` / Quickshell) as a `bar-widget`
   | P/L percent | `▲ 2.6%` |
   | Total value | `€12.9k` (investments + cash) |
   | Privacy | `T212 ▲` — direction only, no amounts anywhere (including the tooltip) |
-- **Left-click** opens the detail panel: invested / value / P/L / free cash, plus all open positions with per-position value and P/L. **Middle-click** (or `R` in the panel) forces a refresh.
+- **Left-click** opens the detail panel: invested / value / P/L / free cash, a **portfolio graph** built from the plugin's own daily snapshots (hover for per-day values; the Trading 212 API exposes no history, so the graph grows from install day), plus all open positions with per-position value and P/L. **Middle-click** (or `R` in the panel) forces a refresh.
 - P/L is colored with your theme's accent (profit) and urgent (loss) colors, so it follows every Omarchy theme.
 - The cycled mode is persisted to `shell.json`, so it survives shell restarts.
-- Records one **daily portfolio snapshot** to `~/.local/state/omarchy-trading212/history-<env>.jsonl` — the Trading 212 API exposes no history, so this builds the dataset a future graph view will draw from.
+- Records one **daily portfolio snapshot** to `~/.local/state/omarchy-trading212/history-<env>.jsonl` — the dataset behind the graph. The graph also plots a live "now" point, so it moves intraday.
 
 ## Install
 

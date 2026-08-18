@@ -282,6 +282,75 @@ function validateCredential(text) {
   return { ok: true, cred: cred, error: "" }
 }
 
+// ---- Snapshot history → graph series. The history file is JSONL, one
+//      line per day; bad lines are skipped, duplicate dates keep the last
+//      write, output is ascending by time with millisecond timestamps.
+function parseHistory(raw) {
+  var lines = String(raw || "").split("\n")
+  var byDate = {}
+  var dates = []
+  for (var i = 0; i < lines.length; i++) {
+    var line = lines[i].trim()
+    if (line === "") continue
+    var entry
+    try {
+      entry = JSON.parse(line)
+    } catch (error) {
+      continue
+    }
+    if (!entry || typeof entry !== "object") continue
+    var value = Number(entry.value)
+    var date = String(entry.date || "")
+    if (!isFinite(value) || date === "") continue
+    var ts = Number(entry.ts)
+    if (byDate[date] === undefined) dates.push(date)
+    byDate[date] = {
+      date: date,
+      ts: isFinite(ts) && ts > 0 ? ts * 1000 : Date.parse(date),
+      value: value,
+      invested: toNumber(entry.invested, 0),
+      pl: toNumber(entry.pl, 0)
+    }
+  }
+  var out = []
+  for (var j = 0; j < dates.length; j++) out.push(byDate[dates[j]])
+  out.sort(function(a, b) { return a.ts - b.ts })
+  return out
+}
+
+// Chart-ready series: daily snapshots plus a trailing live point (today's
+// current value), so the graph moves intraday and works from day one.
+function graphSeries(history, liveValue, nowMs) {
+  var points = []
+  for (var i = 0; i < history.length; i++)
+    points.push({ ts: history[i].ts, value: history[i].value, date: history[i].date })
+  if (liveValue !== null && liveValue !== undefined && isFinite(Number(liveValue)))
+    points.push({ ts: nowMs, value: Number(liveValue), date: "" })
+  points.sort(function(a, b) { return a.ts - b.ts })
+
+  if (points.length === 0)
+    return { points: [], min: 0, max: 0, changeAbs: 0, changePct: null, firstTs: 0, lastTs: 0 }
+
+  var min = points[0].value
+  var max = points[0].value
+  for (var j = 1; j < points.length; j++) {
+    if (points[j].value < min) min = points[j].value
+    if (points[j].value > max) max = points[j].value
+  }
+  var first = points[0]
+  var last = points[points.length - 1]
+  var changeAbs = last.value - first.value
+  return {
+    points: points,
+    min: min,
+    max: max,
+    changeAbs: changeAbs,
+    changePct: first.value > 0 ? (changeAbs / first.value) * 100 : null,
+    firstTs: first.ts,
+    lastTs: last.ts
+  }
+}
+
 // Disk-cached summary (written on every successful fetch, read at startup)
 // so a shell restart shows the last known numbers instantly instead of a
 // loading state. Returns { ok, savedAtMs, data } with coerced numbers.
@@ -349,6 +418,8 @@ if (typeof module !== "undefined") {
     tooltip: tooltip,
     validateCredential: validateCredential,
     parseCache: parseCache,
+    parseHistory: parseHistory,
+    graphSeries: graphSeries,
     snapshotLine: snapshotLine
   }
 }

@@ -25,7 +25,10 @@ Item {
   property var summary: null
   property var positions: []
   property bool positionsLoaded: false
+  property var history: []
   property date lastUpdated: new Date(0)
+
+  readonly property string stateBase: (Quickshell.env("XDG_STATE_HOME") || Quickshell.env("HOME") + "/.local/state") + "/omarchy-trading212"
 
   readonly property string environment: String(setting("environment", "live")).toLowerCase() === "demo" ? "demo" : "live"
   readonly property int refreshIntervalSec: intSetting("refreshIntervalSec", 60, 15, 3600)
@@ -64,8 +67,21 @@ Item {
     _lastPositionsStartMs = 0
     Qt.callLater(function() {
       cacheFile.reload()
+      historyFile.reload()
       refresh()
     })
+  }
+
+  // ---- Snapshot history for the portfolio graph. Watched so the daily
+  //      append (and anything else touching the file) shows up live.
+  FileView {
+    id: historyFile
+    path: root.stateBase + "/history-" + root.environment + ".jsonl"
+    watchChanges: true
+    printErrors: false
+    onFileChanged: reload()
+    onLoaded: root.history = Model.parseHistory(text())
+    onLoadFailed: root.history = []
   }
 
   // ---- Startup cache: last successful summary, per environment. Applied
@@ -74,8 +90,7 @@ Item {
   //      loading state — and a first-fetch hiccup stays invisible.
   FileView {
     id: cacheFile
-    path: (Quickshell.env("XDG_STATE_HOME") || Quickshell.env("HOME") + "/.local/state")
-      + "/omarchy-trading212/cache-" + root.environment + ".json"
+    path: root.stateBase + "/cache-" + root.environment + ".json"
     watchChanges: false
     printErrors: false
     onLoaded: root.applyCache(text())

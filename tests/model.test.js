@@ -183,6 +183,41 @@ test("parseCache round-trips a saved summary and rejects garbage", () => {
   assert.equal(Model.parseCache(JSON.stringify({ data: { invested: "x" } })).ok, false)
 })
 
+test("parseHistory skips garbage, dedupes dates, sorts by time", () => {
+  const raw = [
+    '{"date":"2026-08-16","ts":1755300000,"value":100,"invested":90,"pl":10}',
+    "not json",
+    '{"date":"2026-08-15","ts":1755200000,"value":95,"invested":90,"pl":5}',
+    '{"date":"2026-08-16","ts":1755310000,"value":102,"invested":90,"pl":12}',
+    '{"date":"2026-08-17","value":"broken"}',
+    ""
+  ].join("\n")
+  const history = Model.parseHistory(raw)
+  assert.equal(history.length, 2)
+  assert.equal(history[0].date, "2026-08-15")
+  assert.equal(history[1].value, 102)
+  assert.equal(history[1].ts, 1755310000000)
+})
+
+test("graphSeries appends the live point and computes the period change", () => {
+  const history = Model.parseHistory([
+    '{"date":"2026-08-15","ts":1755200000,"value":100}',
+    '{"date":"2026-08-16","ts":1755300000,"value":110}'
+  ].join("\n"))
+  const series = Model.graphSeries(history, 121, 1755400000000)
+  assert.equal(series.points.length, 3)
+  assert.equal(series.points[2].value, 121)
+  assert.equal(series.points[2].date, "")
+  assert.equal(series.min, 100)
+  assert.equal(series.max, 121)
+  assert.equal(series.changeAbs, 21)
+  assert.ok(Math.abs(series.changePct - 21) < 0.001)
+
+  const empty = Model.graphSeries([], null, 0)
+  assert.equal(empty.points.length, 0)
+  assert.equal(empty.changePct, null)
+})
+
 test("snapshotLine is single-line JSON with rounded values", () => {
   const line = Model.snapshotLine("2026-08-18", 1755500000000, summaryData())
   assert.ok(!line.includes("\n"))
