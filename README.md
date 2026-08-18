@@ -4,7 +4,10 @@ Your [Trading 212](https://www.trading212.com/) portfolio in the [Omarchy](https
 
 Built for the Omarchy 4.x shell (`omarchy-shell` / Quickshell) as a `bar-widget` plugin. It does not work on Omarchy ≤ 3.x (Waybar).
 
-![Detail panel (setup state)](preview.png)
+<p>
+  <img src="preview-live.png" width="48%" alt="Detail panel with live account data, daily change, and positions">
+  <img src="preview.png" width="48%" alt="Detail panel in setup state with the API key input">
+</p>
 
 ## Features
 
