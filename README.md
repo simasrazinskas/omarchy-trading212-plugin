@@ -4,6 +4,8 @@ Your [Trading 212](https://www.trading212.com/) portfolio in the [Omarchy](https
 
 Built for the Omarchy 4.x shell (`omarchy-shell` / Quickshell) as a `bar-widget` plugin. It does not work on Omarchy ≤ 3.x (Waybar).
 
+![Detail panel (setup state)](preview.png)
+
 ## Features
 
 - **Four bar display modes**, cycled with a **right-click**:
