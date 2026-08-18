@@ -11,8 +11,8 @@ Built for the Omarchy 4.x shell (`omarchy-shell` / Quickshell) as a `bar-widget`
 - **Four bar display modes**, cycled with a **right-click**:
   | Mode | Bar shows |
   |---|---|
-  | Invested + P/L | `€12.5k ▲ €322` |
-  | P/L percent | `▲ 2.6%` |
+  | Value + P/L | `€12.8k +€322` — current worth of your investments and signed P/L |
+  | P/L percent | `+2.6%` / `-4.0%` |
   | Total value | `€12.9k` (investments + cash) |
   | Privacy | `T212 ▲` — direction only, no amounts anywhere (including the tooltip) |
 - **Left-click** opens the detail panel: invested / value / P/L / free cash, a **portfolio graph** built from the plugin's own daily snapshots (hover for per-day values; the Trading 212 API exposes no history, so the graph grows from install day), plus all open positions with per-position value and P/L. **Middle-click** (or `R` in the panel) forces a refresh.

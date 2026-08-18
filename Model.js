@@ -52,7 +52,8 @@ function formatSigned(value, symbol) {
   return (n >= 0 ? "+" : "") + formatFull(n, symbol)
 }
 
-// Bar-precision money: whole units below 10k, then 12.5k / 1.23M.
+// Bar-precision money: cents below 100 (so small P/L never rounds to
+// zero), whole units below 10k, then 12.5k / 1.23M.
 function formatBar(value, symbol) {
   var n = toNumber(value, 0)
   var sign = n < 0 ? "-" : ""
@@ -65,7 +66,14 @@ function formatBar(value, symbol) {
     var k = (abs / 1e3).toFixed(1).replace(/\.0$/, "")
     return sign + (symbol || "") + k + "k"
   }
+  if (abs < 100) return sign + (symbol || "") + abs.toFixed(2)
   return sign + (symbol || "") + groupThousands(Math.round(abs))
+}
+
+// Signed bar-precision money: explicit + on gains, - on losses.
+function formatBarSigned(value, symbol) {
+  var n = toNumber(value, 0)
+  return (n >= 0 ? "+" : "") + formatBar(n, symbol)
 }
 
 function formatPercent(pct) {
@@ -231,22 +239,21 @@ function barLabel(mode, state) {
   if (!data) return { main: "T212", delta: state.error ? "—" : "…", sign: 0 }
 
   var symbol = currencySymbol(data.currency)
-  var arrow = data.pl >= 0 ? "▲" : "▼"
   var sign = data.pl >= 0 ? 1 : -1
   var resolved = normalizeMode(mode)
 
   if (resolved === "invested")
-    return { main: formatBar(data.invested, symbol), delta: arrow + " " + formatBar(Math.abs(data.pl), symbol), sign: sign }
+    return { main: formatBar(data.value, symbol), delta: formatBarSigned(data.pl, symbol), sign: sign }
   if (resolved === "percent")
-    return { main: "", delta: arrow + " " + formatPercent(data.plPct).replace(/^\+/, ""), sign: sign }
+    return { main: "", delta: data.plPct === null ? "—" : formatPercent(data.plPct), sign: sign }
   if (resolved === "total")
     return { main: formatBar(data.total, symbol), delta: "", sign: 0 }
-  return { main: "T212", delta: arrow, sign: sign }
+  return { main: "T212", delta: data.pl >= 0 ? "▲" : "▼", sign: sign }
 }
 
 function modeTitle(mode) {
   var resolved = normalizeMode(mode)
-  if (resolved === "invested") return "Invested + P/L"
+  if (resolved === "invested") return "Value + P/L"
   if (resolved === "percent") return "P/L percent"
   if (resolved === "total") return "Total value"
   return "Privacy"
@@ -406,6 +413,7 @@ if (typeof module !== "undefined") {
     formatFull: formatFull,
     formatSigned: formatSigned,
     formatBar: formatBar,
+    formatBarSigned: formatBarSigned,
     formatPercent: formatPercent,
     splitFetchOutput: splitFetchOutput,
     parseSummary: parseSummary,

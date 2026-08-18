@@ -19,11 +19,18 @@ function summaryData() {
   return Model.parseSummary(summaryPayload).data
 }
 
-test("formatBar keeps small values whole and compacts large ones", () => {
+test("formatBar keeps cents under 100, whole under 10k, compacts above", () => {
+  assert.equal(Model.formatBar(99.89, "€"), "€99.89")
   assert.equal(Model.formatBar(9850.12, "€"), "€9,850")
   assert.equal(Model.formatBar(12450.32, "€"), "€12.5k")
   assert.equal(Model.formatBar(1234567, "€"), "€1.23M")
   assert.equal(Model.formatBar(-322.4, "€"), "-€322")
+})
+
+test("formatBarSigned always carries an explicit sign", () => {
+  assert.equal(Model.formatBarSigned(0.04, "€"), "+€0.04")
+  assert.equal(Model.formatBarSigned(-12.4, "€"), "-€12.40")
+  assert.equal(Model.formatBarSigned(322.1, "€"), "+€322")
 })
 
 test("formatFull and formatSigned group thousands with two decimals", () => {
@@ -125,19 +132,21 @@ test("mode ring cycles through all four modes", () => {
 
 test("barLabel renders each mode from summary data", () => {
   const state = { data: summaryData() }
-  assert.deepEqual(Model.barLabel("invested", state), { main: "€12.5k", delta: "▲ €322", sign: 1 })
-  assert.deepEqual(Model.barLabel("percent", state), { main: "", delta: "▲ 2.6%", sign: 1 })
+  assert.deepEqual(Model.barLabel("invested", state), { main: "€12.8k", delta: "+€322", sign: 1 })
+  assert.deepEqual(Model.barLabel("percent", state), { main: "", delta: "+2.6%", sign: 1 })
   assert.deepEqual(Model.barLabel("total", state), { main: "€12.9k", delta: "", sign: 0 })
   assert.deepEqual(Model.barLabel("privacy", state), { main: "T212", delta: "▲", sign: 1 })
 })
 
-test("barLabel shows losses with the down arrow", () => {
+test("barLabel shows the current worth and a signed loss", () => {
   const data = summaryData()
   data.pl = -500
   data.plPct = -4.0
   const label = Model.barLabel("invested", { data })
-  assert.equal(label.delta, "▼ €500")
+  assert.equal(label.main, "€12.8k")
+  assert.equal(label.delta, "-€500")
   assert.equal(label.sign, -1)
+  assert.equal(Model.barLabel("percent", { data }).delta, "-4.0%")
 })
 
 test("barLabel covers setup, auth, loading, and error states", () => {
