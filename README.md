@@ -48,7 +48,7 @@ Prefer the terminal? The equivalent manual command is:
 secret-tool store --label="Trading 212 API (live)" service trading212 account live
 ```
 
-or script it via IPC: `omarchy-shell io.github.simasrazinskas.trading212 setKey "KEY:SECRET"`.
+or script it via IPC: `omarchy-shell io.github.simasrazinskas.trading212 setKey "KEY:SECRET"` — note that unlike the panel input, this puts the key in the command's argv and your shell history, so prefer the panel or `secret-tool` for interactive use.
 
 ### Why the keyring?
 

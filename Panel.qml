@@ -19,7 +19,9 @@ Panel {
   readonly property color foreground: bar ? bar.foreground : Color.foreground
   readonly property color urgent: bar ? bar.urgent : Color.urgent
   readonly property color profit: Color.accent
-  readonly property color dim: Qt.darker(foreground, 1.55)
+  // Alpha-dimmed rather than darkened: darkening a dark foreground on a
+  // light theme would raise contrast instead of lowering it.
+  readonly property color dim: Qt.alpha(foreground, 0.6)
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
 
   readonly property string mode: Model.normalizeMode(setting("mode", "invested"))
@@ -163,6 +165,7 @@ Panel {
         mode: root.mode,
         keyMissing: service.keyMissing,
         authFailed: service.authFailed,
+        rateLimited: service.rateLimited,
         refreshing: service.refreshing,
         error: service.lastError,
         updated: service.lastUpdated.getTime() > 0 ? service.lastUpdated.toISOString() : null,
@@ -311,7 +314,7 @@ Panel {
 
                 Text {
                   text: modelData.label
-                  color: Qt.darker(root.foreground, 1.5)
+                  color: root.dim
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.bodySmall
                   font.letterSpacing: 1
@@ -340,7 +343,7 @@ Panel {
                 id: graphTitle
                 anchors.left: parent.left
                 text: "PORTFOLIO"
-                color: Qt.darker(root.foreground, 1.5)
+                color: root.dim
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.bodySmall
                 font.letterSpacing: 1
@@ -519,7 +522,7 @@ Panel {
                 Text {
                   anchors.verticalCenter: parent.verticalCenter
                   text: "ACCOUNT"
-                  color: Qt.darker(root.foreground, 1.5)
+                  color: root.dim
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.caption
                   font.letterSpacing: 1
@@ -665,7 +668,7 @@ Panel {
 
                     Text {
                       width: parent.width
-                      text: modelData.ticker + " · " + modelData.quantity + " @ "
+                      text: modelData.ticker + " · " + Model.formatQuantity(modelData.quantity) + " @ "
                         + Model.formatFull(modelData.avgPrice, Model.currencySymbol(modelData.instrumentCurrency))
                       color: root.dim
                       font.family: root.fontFamily

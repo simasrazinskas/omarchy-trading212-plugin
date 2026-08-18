@@ -60,9 +60,10 @@ function formatBar(value, symbol) {
   var abs = Math.abs(n)
   if (abs >= 1e6) {
     var m = abs / 1e6
-    return sign + (symbol || "") + (m >= 100 ? Math.round(m) : m.toFixed(2).replace(/0$/, "")) + "M"
+    return sign + (symbol || "") + (m >= 100 ? Math.round(m) : m.toFixed(2).replace(/\.?0+$/, "")) + "M"
   }
-  if (abs >= 1e4) {
+  // Rounded threshold so 9,999.60 renders as €10k, not a sudden €10,000.
+  if (Math.round(abs) >= 1e4) {
     var k = (abs / 1e3).toFixed(1).replace(/\.0$/, "")
     return sign + (symbol || "") + k + "k"
   }
@@ -157,6 +158,13 @@ function parseSummary(raw) {
   }
 
   return { ok: false, error: "Unexpected Trading 212 response" }
+}
+
+// Share quantities: fractional holdings trimmed to four decimals, whole
+// counts shown plain (0.79232076 → "0.7923", 2 → "2").
+function formatQuantity(quantity) {
+  var n = toNumber(quantity, 0)
+  return String(parseFloat(n.toFixed(4)))
 }
 
 // Proprietary tickers like AAPL_US_EQ read better as AAPL.
@@ -414,6 +422,7 @@ if (typeof module !== "undefined") {
     formatSigned: formatSigned,
     formatBar: formatBar,
     formatBarSigned: formatBarSigned,
+    formatQuantity: formatQuantity,
     formatPercent: formatPercent,
     splitFetchOutput: splitFetchOutput,
     parseSummary: parseSummary,

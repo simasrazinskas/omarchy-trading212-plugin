@@ -41,6 +41,7 @@ Item {
   readonly property int positionsGapMs: 2000
   property double _lastSummaryStartMs: 0
   property double _lastPositionsStartMs: 0
+  property double _lastPositionsSuccessMs: 0
 
   function setting(name, fallback) {
     var value = settings ? settings[name] : undefined
@@ -65,6 +66,7 @@ Item {
     lastError = ""
     _lastSummaryStartMs = 0
     _lastPositionsStartMs = 0
+    _lastPositionsSuccessMs = 0
     Qt.callLater(function() {
       cacheFile.reload()
       historyFile.reload()
@@ -128,7 +130,10 @@ Item {
   }
 
   function fetchCommand(path) {
-    var script = "cred=$(secret-tool lookup service trading212 account \"$1\" 2>/dev/null)\n"
+    // The lookup is bounded: a locked keyring can make secret-tool block on
+    // an unlock prompt, and a never-exiting fetch process would wedge the
+    // `running` guard (and refresh with it) until a shell restart.
+    var script = "cred=$(timeout 5 secret-tool lookup service trading212 account \"$1\" 2>/dev/null)\n"
       + "if [ -z \"$cred\" ]; then echo \"__T212_STATUS__ no_key\"; exit 0; fi\n"
       + "case \"$cred\" in\n"
       + "  *:*) auth=\"Basic $(printf %s \"$cred\" | base64 | tr -d '\\n')\" ;;\n"
@@ -142,7 +147,9 @@ Item {
   function refreshIfStale() {
     var updatedAt = lastUpdated instanceof Date ? lastUpdated.getTime() : 0
     if (updatedAt <= 0 || Date.now() - updatedAt >= refreshIntervalSec * 1000) refresh()
-    else if (panelOpen && !positionsLoaded) fetchPositions()
+    // Positions only refresh while the panel is open, so on reopen they can
+    // be much older than the summary — refetch on the same staleness rule.
+    else if (panelOpen && Date.now() - _lastPositionsSuccessMs >= refreshIntervalSec * 1000) fetchPositions()
   }
 
   // `force` skips the gap floor (used right after a key is stored, where
@@ -153,7 +160,10 @@ Item {
     if (!force && Date.now() - _lastSummaryStartMs < summaryGapMs) return
     _lastSummaryStartMs = Date.now()
     refreshing = true
-    lastError = ""
+    // Keep the auth-failure message on screen during a retry; the 401/403
+    // handler rewrites it, and blanking it here would empty the status line
+    // for the whole request.
+    if (!authFailed) lastError = ""
     summaryProcess.command = fetchCommand("/equity/account/summary")
     summaryProcess.running = true
   }
@@ -226,7 +236,7 @@ Item {
     storeProcess.secret = checked.cred
     var script = "IFS= read -r cred\n"
       + "[ -n \"$cred\" ] || exit 1\n"
-      + "printf %s \"$cred\" | secret-tool store --label=\"Trading 212 API ($1)\" service trading212 account \"$1\"\n"
+      + "printf %s \"$cred\" | timeout 15 secret-tool store --label=\"Trading 212 API ($1)\" service trading212 account \"$1\"\n"
     storeProcess.command = ["bash", "-c", script, "t212", environment]
     storeProcess.running = true
   }
@@ -317,6 +327,7 @@ Item {
       }
       root.positions = parsed.items
       root.positionsLoaded = true
+      root._lastPositionsSuccessMs = Date.now()
     }
   }
 
@@ -328,6 +339,8 @@ Item {
   // Bridges transient failures (rate limit, network) faster than the main
   // poll would, so a hiccup shows as at most ~15s of stale data instead of
   // a visible error. Respects the fetch floors; stopped by any success.
+  // A positions-only failure also lands here: the summary refetch cascades
+  // into fetchPositions on success while the panel is open.
   Timer {
     id: retryTimer
     interval: 15000

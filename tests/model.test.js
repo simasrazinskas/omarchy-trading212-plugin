@@ -24,7 +24,16 @@ test("formatBar keeps cents under 100, whole under 10k, compacts above", () => {
   assert.equal(Model.formatBar(9850.12, "€"), "€9,850")
   assert.equal(Model.formatBar(12450.32, "€"), "€12.5k")
   assert.equal(Model.formatBar(1234567, "€"), "€1.23M")
+  assert.equal(Model.formatBar(1000000, "€"), "€1M")
+  assert.equal(Model.formatBar(1200000, "€"), "€1.2M")
+  assert.equal(Model.formatBar(9999.6, "€"), "€10k")
   assert.equal(Model.formatBar(-322.4, "€"), "-€322")
+})
+
+test("formatQuantity trims fractional shares, keeps whole counts plain", () => {
+  assert.equal(Model.formatQuantity(0.79232076), "0.7923")
+  assert.equal(Model.formatQuantity(2), "2")
+  assert.equal(Model.formatQuantity(10.5), "10.5")
 })
 
 test("formatBarSigned always carries an explicit sign", () => {
