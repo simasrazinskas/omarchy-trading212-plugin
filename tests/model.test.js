@@ -131,12 +131,50 @@ test("parsePositions maps the legacy flat schema", () => {
   assert.equal(result.items[0].pl, 18.5)
 })
 
-test("mode ring cycles through all four modes", () => {
-  assert.equal(Model.nextMode("invested"), "percent")
+test("mode ring cycles through all five modes", () => {
+  assert.equal(Model.nextMode("invested"), "daily")
+  assert.equal(Model.nextMode("daily"), "percent")
   assert.equal(Model.nextMode("percent"), "total")
   assert.equal(Model.nextMode("total"), "privacy")
   assert.equal(Model.nextMode("privacy"), "invested")
   assert.equal(Model.normalizeMode("bogus"), "invested")
+})
+
+test("dailyChange uses the previous close, falling back to today's open", () => {
+  const history = Model.parseHistory([
+    '{"date":"2026-08-17","ts":1755400000,"value":100,"open":98}',
+    '{"date":"2026-08-18","ts":1755500000,"value":103,"open":101}'
+  ].join("\n"))
+
+  const vsClose = Model.dailyChange(history, 105, "2026-08-18")
+  assert.equal(vsClose.abs, 5)
+  assert.ok(Math.abs(vsClose.pct - 5) < 0.001)
+  assert.equal(vsClose.sinceOpen, false)
+
+  const installDay = Model.dailyChange(history.slice(1), 105, "2026-08-18")
+  assert.equal(installDay.abs, 4)
+  assert.equal(installDay.sinceOpen, true)
+
+  assert.equal(Model.dailyChange([], 105, "2026-08-18"), null)
+  assert.equal(Model.dailyChange(history, null, "2026-08-18"), null)
+})
+
+test("openForDate reads today's open, old lines fall back to their value", () => {
+  const history = Model.parseHistory([
+    '{"date":"2026-08-17","ts":1755400000,"value":100}',
+    '{"date":"2026-08-18","ts":1755500000,"value":103,"open":101}'
+  ].join("\n"))
+  assert.equal(Model.openForDate(history, "2026-08-18", 999), 101)
+  assert.equal(Model.openForDate(history, "2026-08-17", 999), 100)
+  assert.equal(Model.openForDate(history, "2026-08-19", 999), 999)
+})
+
+test("barLabel renders daily mode with a signed pair and a fallback", () => {
+  const state = { data: summaryData(), daily: { abs: 12.4, pct: 0.52, baseline: 12760, sinceOpen: false } }
+  assert.deepEqual(Model.barLabel("daily", state), { main: "+€12.40", delta: "+0.5%", sign: 1 })
+  state.daily = { abs: -8, pct: -0.31, baseline: 12780, sinceOpen: false }
+  assert.equal(Model.barLabel("daily", state).sign, -1)
+  assert.deepEqual(Model.barLabel("daily", { data: summaryData() }), { main: "1D", delta: "—", sign: 0 })
 })
 
 test("barLabel renders each mode from summary data", () => {
@@ -179,6 +217,12 @@ test("data tooltip includes invested, value, and P/L", () => {
   assert.ok(text.includes("(demo)"))
   assert.ok(text.includes("€12,450.32"))
   assert.ok(text.includes("+€322.10"))
+})
+
+test("data tooltip appends the daily change when available", () => {
+  const state = { data: summaryData(), daily: { abs: 12.4, pct: 0.52, baseline: 12760, sinceOpen: false } }
+  assert.ok(Model.tooltip("invested", state, "live").includes("Today +€12.40 (+0.5%)"))
+  assert.ok(!Model.tooltip("privacy", state, "live").includes("Today"))
 })
 
 test("validateCredential trims and rejects mangled pastes", () => {
@@ -236,11 +280,14 @@ test("graphSeries appends the live point and computes the period change", () => 
   assert.equal(empty.changePct, null)
 })
 
-test("snapshotLine is single-line JSON with rounded values", () => {
-  const line = Model.snapshotLine("2026-08-18", 1755500000000, summaryData())
+test("snapshotLine is single-line JSON with rounded values and the open", () => {
+  const line = Model.snapshotLine("2026-08-18", 1755500000000, summaryData(), 12700.456)
   assert.ok(!line.includes("\n"))
   const parsed = JSON.parse(line)
   assert.equal(parsed.date, "2026-08-18")
   assert.equal(parsed.invested, 12450.32)
   assert.equal(parsed.cash, 158.52)
+  assert.equal(parsed.open, 12700.46)
+  const noOpen = JSON.parse(Model.snapshotLine("2026-08-18", 1755500000000, summaryData()))
+  assert.equal(noOpen.open, 12772.42)
 })

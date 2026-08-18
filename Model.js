@@ -1,7 +1,7 @@
 // Pure data/formatting logic for the Trading 212 bar widget. No QML or
 // Quickshell types in here so the whole file runs under `node --test` too.
 
-var MODE_RING = ["invested", "percent", "total", "privacy"]
+var MODE_RING = ["invested", "daily", "percent", "total", "privacy"]
 
 var CURRENCY_SYMBOLS = {
   EUR: "€",
@@ -252,6 +252,15 @@ function barLabel(mode, state) {
 
   if (resolved === "invested")
     return { main: formatBar(data.value, symbol), delta: formatBarSigned(data.pl, symbol), sign: sign }
+  if (resolved === "daily") {
+    var daily = state.daily
+    if (!daily) return { main: "1D", delta: "—", sign: 0 }
+    return {
+      main: formatBarSigned(daily.abs, symbol),
+      delta: daily.pct === null ? "" : formatPercent(daily.pct),
+      sign: daily.abs >= 0 ? 1 : -1
+    }
+  }
   if (resolved === "percent")
     return { main: "", delta: data.plPct === null ? "—" : formatPercent(data.plPct), sign: sign }
   if (resolved === "total")
@@ -262,6 +271,7 @@ function barLabel(mode, state) {
 function modeTitle(mode) {
   var resolved = normalizeMode(mode)
   if (resolved === "invested") return "Value + P/L"
+  if (resolved === "daily") return "Daily change"
   if (resolved === "percent") return "P/L percent"
   if (resolved === "total") return "Total value"
   return "Privacy"
@@ -280,10 +290,15 @@ function tooltip(mode, state, environment) {
   var data = state.data
   var symbol = currencySymbol(data.currency)
   var pct = data.plPct === null ? "" : " (" + formatPercent(data.plPct) + ")"
+  var daily = state.daily
+  var dailyPart = daily
+    ? " · Today " + formatSigned(daily.abs, symbol) + (daily.pct === null ? "" : " (" + formatPercent(daily.pct) + ")")
+    : ""
   return header
     + " · Invested " + formatFull(data.invested, symbol)
     + " · Value " + formatFull(data.value, symbol)
     + " · P/L " + formatSigned(data.pl, symbol) + pct
+    + dailyPart
     + "\n" + hints
 }
 
@@ -323,6 +338,9 @@ function parseHistory(raw) {
       date: date,
       ts: isFinite(ts) && ts > 0 ? ts * 1000 : Date.parse(date),
       value: value,
+      // Lines written before the open field existed fall back to the
+      // day's (latest) value — a one-day approximation on upgrade.
+      open: toNumber(entry.open, value),
       invested: toNumber(entry.invested, 0),
       pl: toNumber(entry.pl, 0)
     }
@@ -331,6 +349,44 @@ function parseHistory(raw) {
   for (var j = 0; j < dates.length; j++) out.push(byDate[dates[j]])
   out.sort(function(a, b) { return a.ts - b.ts })
   return out
+}
+
+// Today's opening value as recorded in history, so replacing today's
+// snapshot line on every fetch doesn't lose the day's first reading.
+function openForDate(history, date, fallback) {
+  for (var i = history.length - 1; i >= 0; i--)
+    if (history[i].date === date) return history[i].open
+  return fallback
+}
+
+// ---- Daily change: live value against the previous day's closing snapshot.
+//      With no prior day on record (install day), the baseline falls back to
+//      today's opening value, so the mode is meaningful from the first fetch.
+function dailyChange(history, liveValue, todayDate) {
+  if (liveValue === null || liveValue === undefined || !isFinite(Number(liveValue))) return null
+  var value = Number(liveValue)
+  var baseline = null
+  var sinceOpen = false
+  for (var i = history.length - 1; i >= 0; i--) {
+    var entry = history[i]
+    if (entry.date < todayDate) {
+      baseline = entry.value
+      sinceOpen = false
+      break
+    }
+    if (entry.date === todayDate && baseline === null) {
+      baseline = entry.open
+      sinceOpen = true
+    }
+  }
+  if (baseline === null || !isFinite(Number(baseline))) return null
+  var abs = value - Number(baseline)
+  return {
+    abs: abs,
+    pct: baseline > 0 ? (abs / baseline) * 100 : null,
+    baseline: Number(baseline),
+    sinceOpen: sinceOpen
+  }
 }
 
 // Chart-ready series: daily snapshots plus a trailing live point (today's
@@ -401,11 +457,15 @@ function parseCache(raw) {
 }
 
 // One JSONL line per day so a future graph has local history to draw from.
-function snapshotLine(dateString, timestampMs, data) {
+// `open` is the day's first recorded value, carried forward as the line is
+// replaced through the day; `value` ends up as the day's close.
+function snapshotLine(dateString, timestampMs, data, openValue) {
+  var open = isFinite(Number(openValue)) ? Number(openValue) : data.value
   return JSON.stringify({
     date: dateString,
     ts: Math.round(timestampMs / 1000),
     currency: data.currency,
+    open: Math.round(open * 100) / 100,
     invested: Math.round(data.invested * 100) / 100,
     value: Math.round(data.value * 100) / 100,
     pl: Math.round(data.pl * 100) / 100,
@@ -436,6 +496,8 @@ if (typeof module !== "undefined") {
     validateCredential: validateCredential,
     parseCache: parseCache,
     parseHistory: parseHistory,
+    openForDate: openForDate,
+    dailyChange: dailyChange,
     graphSeries: graphSeries,
     snapshotLine: snapshotLine
   }

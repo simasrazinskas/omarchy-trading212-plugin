@@ -274,13 +274,16 @@ Item {
   function recordSnapshot(data) {
     var now = new Date()
     var today = Qt.formatDate(now, "yyyy-MM-dd")
+    // Preserve the day's first reading across rewrites; the first snapshot
+    // of a new day sets it to the current value.
+    var open = Model.openForDate(history, today, data.value)
     var script = "f=\"${XDG_STATE_HOME:-$HOME/.local/state}/omarchy-trading212/history-$1.jsonl\"\n"
       + "mkdir -p \"${f%/*}\"\n"
       + "if [ -f \"$f\" ] && tail -n 1 \"$f\" | grep -q \"\\\"date\\\":\\\"$2\\\"\"; then\n"
       + "  sed -i '$ d' \"$f\"\n"
       + "fi\n"
       + "printf '%s\\n' \"$3\" >> \"$f\"\n"
-    snapshotProcess.command = ["bash", "-c", script, "t212", environment, today, Model.snapshotLine(today, now.getTime(), data)]
+    snapshotProcess.command = ["bash", "-c", script, "t212", environment, today, Model.snapshotLine(today, now.getTime(), data, open)]
     snapshotProcess.running = true
   }
 

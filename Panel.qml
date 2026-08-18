@@ -25,11 +25,20 @@ Panel {
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
 
   readonly property string mode: Model.normalizeMode(setting("mode", "invested"))
+
+  // Live value vs the previous day's closing snapshot (or today's opening
+  // value on install day); re-derived whenever history or the summary moves.
+  readonly property var daily: Model.dailyChange(
+    service.history,
+    service.summary ? service.summary.value : null,
+    Qt.formatDate(new Date(), "yyyy-MM-dd"))
+
   readonly property var barState: ({
     keyMissing: service.keyMissing,
     authFailed: service.authFailed,
     error: service.lastError,
-    data: service.summary
+    data: service.summary,
+    daily: daily
   })
 
   // Vertical bars have no room for amounts; fall back to a compact badge.
@@ -289,24 +298,37 @@ Panel {
             }
           }
 
-          // ---- Account summary stats.
-          Row {
+          // ---- Account summary stats. Flow so a fifth stat wraps to a
+          //      second line instead of overflowing the panel width.
+          Flow {
             visible: !root.needsSetup && service.summary !== null
+            width: parent.width
             spacing: Style.space(28)
 
             Repeater {
-              model: service.summary === null ? [] : [
-                { label: "INVESTED", value: Model.formatFull(service.summary.invested, root.symbol), colored: false },
-                { label: "VALUE", value: Model.formatFull(service.summary.value, root.symbol), colored: false },
-                {
-                  label: "P/L",
-                  value: Model.formatSigned(service.summary.pl, root.symbol)
-                    + (service.summary.plPct === null ? "" : "  " + Model.formatPercent(service.summary.plPct)),
+              model: {
+                if (service.summary === null) return []
+                var stats = [
+                  { label: "INVESTED", value: Model.formatFull(service.summary.invested, root.symbol), colored: false },
+                  { label: "VALUE", value: Model.formatFull(service.summary.value, root.symbol), colored: false },
+                  {
+                    label: "P/L",
+                    value: Model.formatSigned(service.summary.pl, root.symbol)
+                      + (service.summary.plPct === null ? "" : "  " + Model.formatPercent(service.summary.plPct)),
+                    colored: true,
+                    sign: service.summary.pl
+                  }
+                ]
+                if (root.daily !== null) stats.push({
+                  label: root.daily.sinceOpen ? "TODAY (SINCE OPEN)" : "TODAY",
+                  value: Model.formatSigned(root.daily.abs, root.symbol)
+                    + (root.daily.pct === null ? "" : "  " + Model.formatPercent(root.daily.pct)),
                   colored: true,
-                  sign: service.summary.pl
-                },
-                { label: "CASH", value: Model.formatFull(service.summary.free, root.symbol), colored: false }
-              ]
+                  sign: root.daily.abs
+                })
+                stats.push({ label: "CASH", value: Model.formatFull(service.summary.free, root.symbol), colored: false })
+                return stats
+              }
 
               Column {
                 required property var modelData
