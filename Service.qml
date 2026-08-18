@@ -149,7 +149,10 @@ Item {
     if (updatedAt <= 0 || Date.now() - updatedAt >= refreshIntervalSec * 1000) refresh()
     // Positions only refresh while the panel is open, so on reopen they can
     // be much older than the summary — refetch on the same staleness rule.
-    else if (panelOpen && Date.now() - _lastPositionsSuccessMs >= refreshIntervalSec * 1000) fetchPositions()
+    // No panelOpen guard here: this runs from the panel's onOpenedChanged,
+    // where the panelOpen binding may not have propagated yet within the
+    // same signal dispatch, which would silently skip the fetch.
+    else if (Date.now() - _lastPositionsSuccessMs >= refreshIntervalSec * 1000) fetchPositions()
   }
 
   // `force` skips the gap floor (used right after a key is stored, where
