@@ -258,12 +258,18 @@ Item {
     }
   }
 
+  // One line per day, holding the day's LATEST value: today's line is
+  // replaced on every successful fetch, so a day closes at its final
+  // reading instead of freezing at whatever the first poll of the day saw.
   function recordSnapshot(data) {
     var now = new Date()
     var today = Qt.formatDate(now, "yyyy-MM-dd")
     var script = "f=\"${XDG_STATE_HOME:-$HOME/.local/state}/omarchy-trading212/history-$1.jsonl\"\n"
       + "mkdir -p \"${f%/*}\"\n"
-      + "tail -n 1 \"$f\" 2>/dev/null | grep -q \"\\\"date\\\":\\\"$2\\\"\" || printf '%s\\n' \"$3\" >> \"$f\"\n"
+      + "if [ -f \"$f\" ] && tail -n 1 \"$f\" | grep -q \"\\\"date\\\":\\\"$2\\\"\"; then\n"
+      + "  sed -i '$ d' \"$f\"\n"
+      + "fi\n"
+      + "printf '%s\\n' \"$3\" >> \"$f\"\n"
     snapshotProcess.command = ["bash", "-c", script, "t212", environment, today, Model.snapshotLine(today, now.getTime(), data)]
     snapshotProcess.running = true
   }
