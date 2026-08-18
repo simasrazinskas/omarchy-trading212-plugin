@@ -16,6 +16,8 @@ Item {
 
   property bool refreshing: false
   property bool positionsRefreshing: false
+  property bool savingKey: false
+  property string saveError: ""
   property bool keyMissing: false
   property bool authFailed: false
   property bool rateLimited: false
@@ -113,6 +115,54 @@ Item {
       return null
     }
     return result.body
+  }
+
+  // Store the pasted credential in the keyring. The secret travels over the
+  // process's stdin (same pattern as the network panel's Wi-Fi passwords),
+  // never through argv or a file; bash reads one line and re-pipes it to
+  // secret-tool so no trailing newline ends up inside the stored secret.
+  function storeCredential(credential) {
+    var checked = Model.validateCredential(credential)
+    if (!checked.ok) {
+      saveError = checked.error
+      return
+    }
+    if (storeProcess.running) return
+    savingKey = true
+    saveError = ""
+    storeProcess.secret = checked.cred
+    var script = "IFS= read -r cred\n"
+      + "[ -n \"$cred\" ] || exit 1\n"
+      + "printf %s \"$cred\" | secret-tool store --label=\"Trading 212 API ($1)\" service trading212 account \"$1\"\n"
+    storeProcess.command = ["bash", "-c", script, "t212", environment]
+    storeProcess.running = true
+  }
+
+  Process {
+    id: storeProcess
+    property string secret: ""
+    running: false
+    stdinEnabled: true
+    onStarted: {
+      write(secret + "\n")
+      secret = ""
+    }
+    stderr: StdioCollector {
+      id: storeStderr
+      waitForEnd: true
+    }
+    onExited: function(exitCode) {
+      root.savingKey = false
+      if (exitCode !== 0) {
+        var detail = String(storeStderr.text || "").replace(/\s+/g, " ").trim()
+        root.saveError = "Could not store the key" + (detail !== "" ? ": " + detail : " in the keyring")
+        return
+      }
+      root.saveError = ""
+      root.keyMissing = false
+      root.authFailed = false
+      root.refresh()
+    }
   }
 
   function recordSnapshot(data) {

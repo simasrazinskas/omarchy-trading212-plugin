@@ -272,6 +272,16 @@ function tooltip(mode, state, environment) {
     + "\n" + hints
 }
 
+// Sanity-check a pasted credential before it reaches the keyring. Accepts
+// KEY:SECRET pairs and legacy single tokens; rejects empty input and inner
+// whitespace (the usual sign of a mangled paste).
+function validateCredential(text) {
+  var cred = String(text || "").trim()
+  if (cred === "") return { ok: false, cred: "", error: "Paste your API key first" }
+  if (/\s/.test(cred)) return { ok: false, cred: "", error: "The key looks invalid — it contains spaces" }
+  return { ok: true, cred: cred, error: "" }
+}
+
 // One JSONL line per day so a future graph has local history to draw from.
 function snapshotLine(dateString, timestampMs, data) {
   return JSON.stringify({
@@ -303,6 +313,7 @@ if (typeof module !== "undefined") {
     barLabel: barLabel,
     modeTitle: modeTitle,
     tooltip: tooltip,
+    validateCredential: validateCredential,
     snapshotLine: snapshotLine
   }
 }

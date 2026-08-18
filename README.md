@@ -40,18 +40,19 @@ The plugin talks directly to the official [Trading 212 public API](https://docs.
    - **Read-only permissions are enough** — this plugin never places orders; granting it nothing else is safest.
    - Restricting the key to your IP is recommended by Trading 212.
    - The **secret is shown only once** at creation; copy it immediately.
-2. Store the credential in your system keyring (gnome-keyring ships with Omarchy):
+2. **Left-click the widget** and paste the key into the panel's input field as `KEY:SECRET` (a legacy single-token key also works — paste it as-is), pick LIVE or DEMO, and hit SAVE. Done.
 
-   ```sh
-   secret-tool store --label="Trading 212 API (live)" service trading212 account live
-   ```
+Prefer the terminal? The equivalent manual command is:
 
-   Paste `KEY:SECRET` at the prompt (a legacy single-token key also works — paste it as-is).
-3. The widget picks it up on its next refresh — or press `R` in the panel.
+```sh
+secret-tool store --label="Trading 212 API (live)" service trading212 account live
+```
+
+or script it via IPC: `omarchy-shell io.github.simasrazinskas.trading212 setKey "KEY:SECRET"`.
 
 ### Why the keyring?
 
-The credential is never written to a config file, never passed on a process command line, and never appears in `shell.json` or this plugin's settings. At request time the widget runs `secret-tool lookup`, and the `Authorization` header is handed to `curl` via `--config` on stdin. Locked keyring = no requests.
+The credential goes from the input field to your system keyring (gnome-keyring ships with Omarchy) over the storing process's stdin — it is never written to a config file, never passed on a process command line, and never appears in `shell.json` or this plugin's settings. At request time the widget runs `secret-tool lookup`, and the `Authorization` header is handed to `curl` via `--config` on stdin. Locked keyring = no requests.
 
 ### Practice (demo) account
 

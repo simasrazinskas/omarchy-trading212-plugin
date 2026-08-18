@@ -42,7 +42,6 @@ Panel {
   readonly property color deltaColor: pieces.sign > 0 ? profit : (pieces.sign < 0 ? urgent : (service.summary ? foreground : dim))
   readonly property bool needsSetup: service.keyMissing || service.authFailed
   readonly property string symbol: service.summary ? Model.currencySymbol(service.summary.currency) : ""
-  readonly property string setupCommand: "secret-tool store --label=\"Trading 212 API (" + service.environment + ")\" service trading212 account " + service.environment
 
   readonly property string statusText: {
     if (service.keyMissing) return "API KEY REQUIRED"
@@ -55,19 +54,23 @@ Panel {
   }
 
   function cycleMode() {
-    persistMode(Model.nextMode(mode))
+    persistSetting("mode", Model.nextMode(mode))
   }
 
-  // Mirrors the clock's format cycling: apply locally for an instant label
-  // change, then write the same value back through shell.json so the cycled
-  // mode survives shell restarts.
-  function persistMode(next) {
+  // Mirrors the clock's format cycling: apply locally for an instant change,
+  // then write the same value back through shell.json so it survives shell
+  // restarts.
+  function persistSetting(name, value) {
     var entry = { id: root.moduleName }
     for (var key in root.settings) if (key !== "id") entry[key] = root.settings[key]
-    entry.mode = next
+    entry[name] = value
     root.settings = entry
     if (root.bar && root.bar.shell && typeof root.bar.shell.updateEntryInline === "function")
       root.bar.shell.updateEntryInline(root.moduleName, entry)
+  }
+
+  function saveCredential() {
+    service.storeCredential(credentialField.text)
   }
 
   function plColor(value) {
@@ -79,13 +82,19 @@ Panel {
 
   onOpenedChanged: if (opened) {
     service.refreshIfStale()
-    Qt.callLater(function() { keyCatcher.forceActiveFocus() })
+    Qt.callLater(function() {
+      if (root.needsSetup) credentialField.forceActiveFocus()
+      else keyCatcher.forceActiveFocus()
+    })
   }
 
   Service {
     id: service
     settings: root.settings
     panelOpen: root.opened
+    // A successful save clears the field so the secret doesn't linger in the
+    // input; a failed one keeps it for correction.
+    onSavingKeyChanged: if (!savingKey && saveError === "") credentialField.text = ""
   }
 
   IpcHandler {
@@ -96,6 +105,12 @@ Panel {
     function hide(): void { root.close() }
     function toggle(): void { root.toggle() }
     function refresh(): string { service.refresh(); return "ok" }
+    function setKey(credential: string): string {
+      var checked = Model.validateCredential(credential)
+      if (!checked.ok) return checked.error
+      service.storeCredential(credential)
+      return "ok"
+    }
     function cycle(): string { root.cycleMode(); return root.mode }
     function mode(): string { return root.mode }
     function status(): string {
@@ -168,6 +183,7 @@ Panel {
     PanelKeyCatcher {
       id: keyCatcher
       anchors.fill: parent
+      blocked: credentialField.activeFocus
       onCloseRequested: root.close()
       onTabRequested: function(direction) { root.switchPanel(direction) }
       onTextKey: function(text) {
@@ -288,7 +304,8 @@ Panel {
             width: panelFlick.width
             spacing: Style.space(10)
 
-            // ---- Setup state: how to store the API credential.
+            // ---- Setup state: paste the API credential straight into the
+            //      panel; it lands in the system keyring over stdin.
             Column {
               visible: root.needsSetup
               width: parent.width
@@ -299,7 +316,7 @@ Panel {
               Text {
                 width: parent.width
                 text: service.authFailed
-                  ? "The stored API key was rejected. Generate a fresh key and store it again:"
+                  ? "The stored API key was rejected. Paste a fresh one below:"
                   : "Connect your Trading 212 account"
                 color: root.foreground
                 font.family: root.fontFamily
@@ -310,62 +327,106 @@ Panel {
               Text {
                 visible: !service.authFailed
                 width: parent.width
-                text: "1. In Trading 212: Settings → API (Beta) → generate a key. Read-only permissions are enough; restricting it to your IP is recommended.\n2. Store it in the system keyring with the command below — paste KEY:SECRET when prompted (older single-token keys work too).\n3. Press R to retry."
+                text: "In Trading 212: Settings → API (Beta) → generate a key. Read-only permissions are enough; restricting it to your IP is recommended. Paste it as KEY:SECRET (older single-token keys work too)."
                 color: root.dim
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.bodySmall
                 wrapMode: Text.Wrap
               }
 
-              Item {
-                width: parent.width
-                implicitHeight: setupCommandRow.implicitHeight + Style.space(4)
+              Row {
+                spacing: Style.space(6)
 
-                Row {
-                  id: setupCommandRow
-                  anchors.left: parent.left
-                  spacing: Style.space(6)
-
-                  Text {
-                    width: Math.min(implicitWidth, panelFlick.width - Style.space(24))
-                    text: root.setupCommand
-                    color: root.foreground
-                    font.family: root.fontFamily
-                    font.pixelSize: Style.font.bodySmall
-                    font.bold: true
-                    elide: Text.ElideRight
-                  }
-
-                  Text {
-                    anchors.verticalCenter: parent.verticalCenter
-                    text: "󰆏"
-                    color: root.dim
-                    font.family: root.fontFamily
-                    font.pixelSize: Style.font.body
-                  }
+                Text {
+                  anchors.verticalCenter: parent.verticalCenter
+                  text: "ACCOUNT"
+                  color: Qt.darker(root.foreground, 1.5)
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                  font.letterSpacing: 1
+                  rightPadding: Style.space(4)
                 }
 
-                MouseArea {
-                  id: setupCommandMouse
-                  anchors.fill: setupCommandRow
-                  hoverEnabled: true
-                  cursorShape: Qt.PointingHandCursor
-                  onClicked: {
-                    Quickshell.execDetached(["bash", "-c", "printf %s " + Util.shellQuote(root.setupCommand) + " | wl-copy"])
-                    setupCopiedTimer.restart()
-                  }
-                }
-
-                PanelToolTip {
-                  visible: setupCommandMouse.containsMouse
-                  text: setupCopiedTimer.running ? "Copied" : "Copy to clipboard"
+                Button {
+                  text: "LIVE"
+                  selected: service.environment === "live"
+                  foreground: root.foreground
+                  background: "transparent"
+                  accent: Color.accent
                   fontFamily: root.fontFamily
+                  fontSize: Style.font.caption
+                  horizontalPadding: Style.space(7)
+                  verticalPadding: Style.space(1)
+                  onClicked: root.persistSetting("environment", "live")
                 }
 
-                Timer {
-                  id: setupCopiedTimer
-                  interval: 1500
+                Button {
+                  text: "DEMO"
+                  selected: service.environment === "demo"
+                  foreground: root.foreground
+                  background: "transparent"
+                  accent: Color.accent
+                  fontFamily: root.fontFamily
+                  fontSize: Style.font.caption
+                  horizontalPadding: Style.space(7)
+                  verticalPadding: Style.space(1)
+                  onClicked: root.persistSetting("environment", "demo")
                 }
+              }
+
+              Row {
+                width: parent.width
+                spacing: Style.space(8)
+
+                TextField {
+                  id: credentialField
+                  width: parent.width - saveButton.implicitWidth - Style.space(8)
+                  password: true
+                  enabled: !service.savingKey
+                  placeholderText: "Paste API key (KEY:SECRET)"
+                  foreground: root.foreground
+                  font.family: root.fontFamily
+                  onAccepted: root.saveCredential()
+                  Keys.onPressed: function(event) {
+                    if (event.key === Qt.Key_Escape) {
+                      root.close()
+                      event.accepted = true
+                    }
+                  }
+                }
+
+                Button {
+                  id: saveButton
+                  anchors.verticalCenter: parent.verticalCenter
+                  text: service.savingKey ? "SAVING…" : "SAVE"
+                  enabled: !service.savingKey && credentialField.text.trim() !== ""
+                  foreground: root.foreground
+                  background: "transparent"
+                  bordered: true
+                  accent: Color.accent
+                  fontFamily: root.fontFamily
+                  fontSize: Style.font.bodySmall
+                  onClicked: root.saveCredential()
+                }
+              }
+
+              Text {
+                visible: service.saveError !== ""
+                width: parent.width
+                text: service.saveError
+                color: root.urgent
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.bodySmall
+                wrapMode: Text.Wrap
+              }
+
+              Text {
+                width: parent.width
+                text: "The key is stored in the system keyring (gnome-keyring), never in a config file."
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                wrapMode: Text.Wrap
               }
             }
 

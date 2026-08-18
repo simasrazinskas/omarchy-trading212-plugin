@@ -163,6 +163,13 @@ test("data tooltip includes invested, value, and P/L", () => {
   assert.ok(text.includes("+€322.10"))
 })
 
+test("validateCredential trims and rejects mangled pastes", () => {
+  assert.deepEqual(Model.validateCredential("  KEY:SECRET\n"), { ok: true, cred: "KEY:SECRET", error: "" })
+  assert.equal(Model.validateCredential("legacy-token").ok, true)
+  assert.equal(Model.validateCredential("").ok, false)
+  assert.equal(Model.validateCredential("KEY: SECRET").ok, false)
+})
+
 test("snapshotLine is single-line JSON with rounded values", () => {
   const line = Model.snapshotLine("2026-08-18", 1755500000000, summaryData())
   assert.ok(!line.includes("\n"))
