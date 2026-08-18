@@ -32,6 +32,19 @@ Then place it on the bar if it doesn't appear automatically:
 omarchy bar put io.github.simasrazinskas.trading212 right
 ```
 
+## Uninstall
+
+```sh
+omarchy plugin remove io.github.simasrazinskas.trading212
+```
+
+The plugin leaves behind only two things, both yours to keep or delete:
+
+```sh
+secret-tool clear service trading212 account live    # the API key (and `account demo` if set)
+rm -rf ~/.local/state/omarchy-trading212             # summary cache + daily snapshot history
+```
+
 ## Connect your Trading 212 account
 
 The plugin talks directly to the official [Trading 212 public API](https://docs.trading212.com/api) (Invest and Stocks ISA accounts; CFD is not supported by the API).
