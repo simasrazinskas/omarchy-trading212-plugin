@@ -104,8 +104,12 @@ Item {
     positionsProcess.running = true
   }
 
-  // Shared HTTP-state handling; returns the body when the response is usable.
-  function usableBody(output, label) {
+  // Shared HTTP-state handling; returns the body when the response is
+  // usable. Transient failures (rate limit, network, server errors) are
+  // deliberately silent when cached data exists — the widget keeps showing
+  // the last good numbers and the retry timer fills the gap. Only
+  // actionable states (missing key, rejected key) always surface.
+  function usableBody(output, label, hasCache) {
     var result = Model.splitFetchOutput(output)
     if (result.status === "no_key") {
       keyMissing = true
@@ -117,7 +121,8 @@ Item {
     }
     keyMissing = false
     if (result.status === "curl_error") {
-      lastError = "Network error reaching Trading 212"
+      if (!hasCache) lastError = "Network error — retrying"
+      retryTimer.restart()
       return null
     }
     if (result.http === 401 || result.http === 403) {
@@ -128,14 +133,17 @@ Item {
     authFailed = false
     if (result.http === 429) {
       rateLimited = true
-      lastError = "Rate limited by Trading 212 — backing off"
+      if (!hasCache) lastError = "Rate limited — retrying shortly"
+      retryTimer.restart()
       return null
     }
     rateLimited = false
     if (result.http < 200 || result.http >= 300) {
-      lastError = "Trading 212 " + label + " request failed (HTTP " + result.http + ")"
+      if (!hasCache) lastError = "Trading 212 " + label + " request failed (HTTP " + result.http + ")"
+      retryTimer.restart()
       return null
     }
+    retryTimer.stop()
     return result.body
   }
 
@@ -206,11 +214,11 @@ Item {
     }
     onExited: function(exitCode) {
       root.refreshing = false
-      var body = root.usableBody(String(summaryStdout.text || ""), "summary")
+      var body = root.usableBody(String(summaryStdout.text || ""), "summary", root.summary !== null)
       if (body === null) return
       var parsed = Model.parseSummary(body)
       if (!parsed.ok) {
-        root.lastError = parsed.error
+        if (root.summary === null) root.lastError = parsed.error
         return
       }
       root.summary = parsed.data
@@ -230,11 +238,11 @@ Item {
     }
     onExited: function(exitCode) {
       root.positionsRefreshing = false
-      var body = root.usableBody(String(positionsStdout.text || ""), "positions")
+      var body = root.usableBody(String(positionsStdout.text || ""), "positions", root.positionsLoaded)
       if (body === null) return
       var parsed = Model.parsePositions(body)
       if (!parsed.ok) {
-        root.lastError = parsed.error
+        if (!root.positionsLoaded) root.lastError = parsed.error
         return
       }
       root.positions = parsed.items
@@ -245,6 +253,16 @@ Item {
   Process {
     id: snapshotProcess
     running: false
+  }
+
+  // Bridges transient failures (rate limit, network) faster than the main
+  // poll would, so a hiccup shows as at most ~15s of stale data instead of
+  // a visible error. Respects the fetch floors; stopped by any success.
+  Timer {
+    id: retryTimer
+    interval: 15000
+    repeat: false
+    onTriggered: root.refresh()
   }
 
   Timer {

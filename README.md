@@ -76,7 +76,7 @@ and set the environment in `~/.config/omarchy/shell.json` on the widget's bar en
 | `environment` | `live` | `live` or `demo`. |
 | `mode` | `invested` | Current display mode; normally you just right-click instead of editing this. |
 
-The account-summary endpoint is rate-limited to 1 request / 5 s by Trading 212, so the 60 s default is conservative; the minimum of 15 s stays well clear of it. Manual refreshes (middle-click, IPC) are additionally floored at one summary fetch per 6 s, so you can't trip a 429 by mashing the widget. Mode switching never touches the API — it just re-renders cached data.
+The account-summary endpoint is rate-limited to 1 request / 5 s by Trading 212, so the 60 s default is conservative; the minimum of 15 s stays well clear of it. Manual refreshes (middle-click, IPC) are additionally floored at one summary fetch per 6 s, so you can't trip a 429 by mashing the widget. Mode switching never touches the API — it just re-renders cached data. Transient failures (rate limit, network blips, server errors) never replace data you already have: the widget keeps showing the cached numbers and silently retries after 15 s; errors are only shown when there is no data at all or the key itself is missing/rejected.
 
 ## IPC
 
