@@ -31,6 +31,14 @@ Item {
   readonly property int refreshIntervalSec: intSetting("refreshIntervalSec", 60, 15, 3600)
   readonly property string baseUrl: (environment === "demo" ? "https://demo.trading212.com" : "https://live.trading212.com") + "/api/v0"
 
+  // Hard floors between fetches, tracked from request start. Trading 212
+  // allows 1 req/5s on the summary endpoint and 1 req/1s on positions, so
+  // spammed manual refreshes (middle-click, IPC) can never run into a 429.
+  readonly property int summaryGapMs: 6000
+  readonly property int positionsGapMs: 2000
+  property double _lastSummaryStartMs: 0
+  property double _lastPositionsStartMs: 0
+
   function setting(name, fallback) {
     var value = settings ? settings[name] : undefined
     return value === undefined || value === null ? fallback : value
@@ -42,7 +50,8 @@ Item {
     return Math.max(minimum, Math.min(maximum, value))
   }
 
-  // Environment switch invalidates everything from the other account.
+  // Environment switch invalidates everything from the other account — and
+  // its rate-limit bucket, so the floors reset too.
   onEnvironmentChanged: {
     summary = null
     positions = []
@@ -50,6 +59,8 @@ Item {
     keyMissing = false
     authFailed = false
     lastError = ""
+    _lastSummaryStartMs = 0
+    _lastPositionsStartMs = 0
     Qt.callLater(refresh)
   }
 
@@ -71,16 +82,23 @@ Item {
     else if (panelOpen && !positionsLoaded) fetchPositions()
   }
 
-  function refresh() {
+  // `force` skips the gap floor (used right after a key is stored, where
+  // waiting out the floor of a just-failed attempt would feel broken); it
+  // never skips the running guard.
+  function refresh(force) {
     if (summaryProcess.running) return
+    if (!force && Date.now() - _lastSummaryStartMs < summaryGapMs) return
+    _lastSummaryStartMs = Date.now()
     refreshing = true
     lastError = ""
     summaryProcess.command = fetchCommand("/equity/account/summary")
     summaryProcess.running = true
   }
 
-  function fetchPositions() {
+  function fetchPositions(force) {
     if (positionsProcess.running) return
+    if (!force && Date.now() - _lastPositionsStartMs < positionsGapMs) return
+    _lastPositionsStartMs = Date.now()
     positionsRefreshing = true
     positionsProcess.command = fetchCommand("/equity/positions")
     positionsProcess.running = true
@@ -91,6 +109,10 @@ Item {
     var result = Model.splitFetchOutput(output)
     if (result.status === "no_key") {
       keyMissing = true
+      // No request actually left the machine, so don't let this attempt
+      // count against the fetch floors.
+      _lastSummaryStartMs = 0
+      _lastPositionsStartMs = 0
       return null
     }
     keyMissing = false
@@ -161,7 +183,7 @@ Item {
       root.saveError = ""
       root.keyMissing = false
       root.authFailed = false
-      root.refresh()
+      root.refresh(true)
     }
   }
 
@@ -195,7 +217,7 @@ Item {
       root.lastUpdated = new Date()
       root.lastError = ""
       root.recordSnapshot(parsed.data)
-      if (root.panelOpen) root.fetchPositions()
+      if (root.panelOpen) root.fetchPositions(true)
     }
   }
 
