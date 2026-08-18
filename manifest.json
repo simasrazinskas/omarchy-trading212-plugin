@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "io.github.simasrazinskas.trading212",
   "name": "Trading 212",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "author": "Simas Razinskas",
   "license": "MIT",
   "description": "Trading 212 portfolio in the Omarchy bar: invested amount and P/L at a glance, with a detail panel of positions.",

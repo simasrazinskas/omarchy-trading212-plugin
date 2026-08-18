@@ -39,7 +39,10 @@ Panel {
     return Model.barLabel(mode, barState)
   }
 
-  readonly property color deltaColor: pieces.sign > 0 ? profit : (pieces.sign < 0 ? urgent : (service.summary ? foreground : dim))
+  // Bar text stays in the theme's foreground regardless of P/L direction —
+  // the +/- sign carries the direction, and the label is always readable on
+  // any theme. Only the no-data states (setup, loading) dim the delta.
+  readonly property color deltaColor: service.summary ? foreground : dim
   readonly property bool needsSetup: service.keyMissing || service.authFailed
   readonly property string symbol: service.summary ? Model.currencySymbol(service.summary.currency) : ""
 
