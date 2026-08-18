@@ -51,7 +51,8 @@ Item {
   }
 
   // Environment switch invalidates everything from the other account — and
-  // its rate-limit bucket, so the floors reset too.
+  // its rate-limit bucket, so the floors reset too. The other environment's
+  // disk cache fills the gap until the first fetch lands.
   onEnvironmentChanged: {
     summary = null
     positions = []
@@ -61,7 +62,54 @@ Item {
     lastError = ""
     _lastSummaryStartMs = 0
     _lastPositionsStartMs = 0
-    Qt.callLater(refresh)
+    Qt.callLater(function() {
+      cacheFile.reload()
+      refresh()
+    })
+  }
+
+  // ---- Startup cache: last successful summary, per environment. Applied
+  //      only while no live data exists, so a restart renders the previous
+  //      numbers immediately (with their real timestamp) instead of a
+  //      loading state — and a first-fetch hiccup stays invisible.
+  FileView {
+    id: cacheFile
+    path: (Quickshell.env("XDG_STATE_HOME") || Quickshell.env("HOME") + "/.local/state")
+      + "/omarchy-trading212/cache-" + root.environment + ".json"
+    watchChanges: false
+    printErrors: false
+    onLoaded: root.applyCache(text())
+  }
+
+  function applyCache(raw) {
+    if (summary !== null) return
+    var cached = Model.parseCache(raw)
+    if (!cached.ok) return
+    summary = cached.data
+    if (cached.savedAtMs > 0) lastUpdated = new Date(cached.savedAtMs)
+  }
+
+  function writeCache(data) {
+    if (cacheWriteProcess.running) return
+    cacheWriteProcess.payload = JSON.stringify({ savedAt: new Date().toISOString(), data: data })
+    var script = "f=\"${XDG_STATE_HOME:-$HOME/.local/state}/omarchy-trading212/cache-$1.json\"\n"
+      + "mkdir -p \"${f%/*}\"\n"
+      + "IFS= read -r payload\n"
+      + "[ -n \"$payload\" ] || exit 0\n"
+      + "printf '%s\\n' \"$payload\" > \"$f.tmp\" && mv \"$f.tmp\" \"$f\"\n"
+    cacheWriteProcess.command = ["bash", "-c", script, "t212", environment]
+    cacheWriteProcess.running = true
+  }
+
+  Process {
+    id: cacheWriteProcess
+    property string payload: ""
+    running: false
+    stdinEnabled: true
+    onStarted: {
+      write(payload + "\n")
+      payload = ""
+    }
   }
 
   function fetchCommand(path) {
@@ -224,6 +272,7 @@ Item {
       root.summary = parsed.data
       root.lastUpdated = new Date()
       root.lastError = ""
+      root.writeCache(parsed.data)
       root.recordSnapshot(parsed.data)
       if (root.panelOpen) root.fetchPositions(true)
     }

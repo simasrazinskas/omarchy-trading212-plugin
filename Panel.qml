@@ -48,8 +48,11 @@ Panel {
     if (service.authFailed) return service.lastError.toUpperCase()
     if (service.refreshing) return "REFRESHING…"
     if (service.lastError !== "") return service.lastError.toUpperCase()
-    if (service.lastUpdated.getTime() > 0)
-      return service.environment.toUpperCase() + " · " + Model.modeTitle(root.mode).toUpperCase() + " · " + Qt.formatTime(service.lastUpdated, "HH:mm")
+    if (service.lastUpdated.getTime() > 0) {
+      var sameDay = Qt.formatDate(service.lastUpdated, "yyyy-MM-dd") === Qt.formatDate(new Date(), "yyyy-MM-dd")
+      var stamp = sameDay ? Qt.formatTime(service.lastUpdated, "HH:mm") : Qt.formatDateTime(service.lastUpdated, "d MMM HH:mm")
+      return service.environment.toUpperCase() + " · " + Model.modeTitle(root.mode).toUpperCase() + " · " + stamp
+    }
     return "CONNECTING…"
   }
 
@@ -59,14 +62,30 @@ Panel {
 
   // Mirrors the clock's format cycling: apply locally for an instant change,
   // then write the same value back through shell.json so it survives shell
-  // restarts.
+  // restarts. The write is debounced so a burst of right-clicks lands as a
+  // single shell.json update of the final value — the intermediate writes
+  // would otherwise race the bar's settings re-injection.
+  property var _pendingEntry: null
+
   function persistSetting(name, value) {
     var entry = { id: root.moduleName }
     for (var key in root.settings) if (key !== "id") entry[key] = root.settings[key]
     entry[name] = value
     root.settings = entry
-    if (root.bar && root.bar.shell && typeof root.bar.shell.updateEntryInline === "function")
-      root.bar.shell.updateEntryInline(root.moduleName, entry)
+    _pendingEntry = entry
+    persistTimer.restart()
+  }
+
+  Timer {
+    id: persistTimer
+    interval: 400
+    repeat: false
+    onTriggered: {
+      if (!root._pendingEntry) return
+      if (root.bar && root.bar.shell && typeof root.bar.shell.updateEntryInline === "function")
+        root.bar.shell.updateEntryInline(root.moduleName, root._pendingEntry)
+      root._pendingEntry = null
+    }
   }
 
   function saveCredential() {

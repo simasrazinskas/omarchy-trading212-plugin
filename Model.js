@@ -282,6 +282,40 @@ function validateCredential(text) {
   return { ok: true, cred: cred, error: "" }
 }
 
+// Disk-cached summary (written on every successful fetch, read at startup)
+// so a shell restart shows the last known numbers instantly instead of a
+// loading state. Returns { ok, savedAtMs, data } with coerced numbers.
+function parseCache(raw) {
+  var parsed
+  try {
+    parsed = JSON.parse(String(raw || ""))
+  } catch (error) {
+    return { ok: false }
+  }
+  if (!parsed || typeof parsed !== "object" || !parsed.data || typeof parsed.data !== "object") return { ok: false }
+  var d = parsed.data
+  if (!isFinite(Number(d.invested)) || !isFinite(Number(d.value))) return { ok: false }
+  var invested = toNumber(d.invested, 0)
+  var pl = toNumber(d.pl, 0)
+  var savedAtMs = Date.parse(String(parsed.savedAt || ""))
+  return {
+    ok: true,
+    savedAtMs: isFinite(savedAtMs) ? savedAtMs : 0,
+    data: {
+      currency: String(d.currency || ""),
+      invested: invested,
+      value: toNumber(d.value, 0),
+      pl: pl,
+      plPct: invested > 0 ? (pl / invested) * 100 : null,
+      free: toNumber(d.free, 0),
+      reserved: toNumber(d.reserved, 0),
+      pieCash: toNumber(d.pieCash, 0),
+      realized: toNumber(d.realized, 0),
+      total: toNumber(d.total, 0)
+    }
+  }
+}
+
 // One JSONL line per day so a future graph has local history to draw from.
 function snapshotLine(dateString, timestampMs, data) {
   return JSON.stringify({
@@ -314,6 +348,7 @@ if (typeof module !== "undefined") {
     modeTitle: modeTitle,
     tooltip: tooltip,
     validateCredential: validateCredential,
+    parseCache: parseCache,
     snapshotLine: snapshotLine
   }
 }

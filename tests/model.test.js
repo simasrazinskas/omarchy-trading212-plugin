@@ -170,6 +170,19 @@ test("validateCredential trims and rejects mangled pastes", () => {
   assert.equal(Model.validateCredential("KEY: SECRET").ok, false)
 })
 
+test("parseCache round-trips a saved summary and rejects garbage", () => {
+  const saved = JSON.stringify({ savedAt: "2026-08-18T00:19:04.704Z", data: summaryData() })
+  const result = Model.parseCache(saved)
+  assert.equal(result.ok, true)
+  assert.equal(result.savedAtMs, Date.parse("2026-08-18T00:19:04.704Z"))
+  assert.equal(result.data.invested, 12450.32)
+  assert.ok(Math.abs(result.data.plPct - 2.587) < 0.01)
+
+  assert.equal(Model.parseCache("not json").ok, false)
+  assert.equal(Model.parseCache("{}").ok, false)
+  assert.equal(Model.parseCache(JSON.stringify({ data: { invested: "x" } })).ok, false)
+})
+
 test("snapshotLine is single-line JSON with rounded values", () => {
   const line = Model.snapshotLine("2026-08-18", 1755500000000, summaryData())
   assert.ok(!line.includes("\n"))
