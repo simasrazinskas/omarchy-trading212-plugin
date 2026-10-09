@@ -21,18 +21,16 @@ Scroller {
   readonly property var store: service.activity.store
   readonly property string filter: Activity.FILTERS.indexOf(host.setting("activityFilter", "all")) === -1 ? "all" : host.setting("activityFilter", "all")
   property int limit: 150
-  readonly property var rows: Activity.timeline(store, filter, service.cashRules, limit)
+  readonly property var allRows: Activity.timeline(store, filter, service.cashRules, 0)
+  readonly property var rows: allRows.slice(0, limit)
   readonly property var groups: Activity.groupByDay(rows, service.now)
-  readonly property int totalRows: Activity.timeline(store, filter, service.cashRules, 0).length
+  readonly property int totalRows: allRows.length
 
   onFilterChanged: {
     limit = 150
     toTop()
   }
 
-  function move(dy) { scrollBy(dy * Style.space(48)) }
-  function activate() {}
-  function back() { return false }
   function textKey(t) {
     if (t === "f") {
       host.persistSetting("activityFilter", Activity.FILTERS[(Activity.FILTERS.indexOf(filter) + 1) % Activity.FILTERS.length])

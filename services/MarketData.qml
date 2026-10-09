@@ -1,6 +1,8 @@
 import QtQuick
 import "../lib/T212.js" as T212
 import "../lib/Market.js" as Market
+import "../lib/Format.js" as Format
+import "../lib/Shell.js" as Shell
 
 // Public market data for the held symbols: quotes (today's move, session
 // state, 52-week range), company profile (sector, fundamentals, dividend
@@ -18,6 +20,8 @@ Item {
   property bool active: false
   property var positions: []
   property string path: ""
+  // Set by the service in fixture mode: answer from files, not the network.
+  property string fixtureDir: ""
 
   property var quotes: ({})
   property var profiles: ({})
@@ -32,6 +36,7 @@ Item {
   // Consecutive Nasdaq failures; past a handful the source pauses for a
   // while instead of hammering an endpoint that is refusing us.
   property int _failures: 0
+  // Pause end (ms) after repeated Nasdaq failures; 0 while not paused.
   property double blockedUntil: 0
   property bool _loaded: false
 
@@ -48,7 +53,7 @@ Item {
     return out
   }
   readonly property string usMarketStatus: Market.usMarketStatus(quotes)
-  readonly property bool paused: blockedUntil > Date.now()
+  readonly property bool paused: blockedUntil > 0
 
   readonly property string userAgent: "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0 Safari/537.36"
 
@@ -68,22 +73,14 @@ Item {
     gaps: ({ nasdaq: 300 })
   }
 
-  // Public GET with browser-like headers; `referer` doubles as the Origin
-  // (Nasdaq and CNN both refuse requests without them). Response framing
-  // matches the Trading 212 fetches so one parser classifies both.
+  // Public GET; the response framing matches the Trading 212 fetches, so
+  // one parser classifies both.
   function fetch(id, key, url, accept, referer, done, lane) {
-    var script = "origin=\"${3%/}\"\n"
-      + "set -- \"$1\" \"$2\" \"$3\" \"$4\" \"$origin\"\n"
-      + "if [ -n \"$3\" ]; then\n"
-      + "  curl -sS --compressed --max-time 12 -A \"$4\" -H \"Accept: $2\" -H \"Referer: $3\" -H \"Origin: $5\" -w '\\n__T212_HTTP__ %{http_code}' \"$1\" 2>/dev/null || echo \"__T212_STATUS__ curl_error\"\n"
-      + "else\n"
-      + "  curl -sS --compressed --max-time 12 -A \"$4\" -H \"Accept: $2\" -w '\\n__T212_HTTP__ %{http_code}' \"$1\" 2>/dev/null || echo \"__T212_STATUS__ curl_error\"\n"
-      + "fi\n"
     var queue = lane || web
     queue.enqueue({
       id: id,
       key: key,
-      command: ["bash", "-c", script, "market", url, accept, referer, userAgent],
+      command: fixtureDir !== "" ? Shell.fixtureFetch(fixtureDir, url) : Shell.publicFetch(url, accept, referer, userAgent),
       done: function(raw) {
         var result = T212.classify(raw)
         done(result.kind === "ok" ? result.body : null, result)
@@ -104,6 +101,9 @@ Item {
           _failures = 0
           web.clear()
           quoteLane.clear()
+          // Cleared news jobs never call back; without this their
+          // holdings would show "Loading headlines…" until a restart.
+          newsLoading = {}
         }
         return
       }
@@ -117,11 +117,7 @@ Item {
   }
 
   function assign(mapName, key, value) {
-    var next = {}
-    var current = root[mapName]
-    for (var k in current) next[k] = current[k]
-    next[key] = value
-    root[mapName] = next
+    root[mapName] = Format.withKey(root[mapName], key, value)
     schedulePersist()
   }
 
@@ -166,11 +162,10 @@ Item {
   }
 
   function fetchChart(sym) {
-    var to = new Date()
-    var from = new Date(to.getTime() - 366 * 86400000)
-    function ymd(d) { return d.getFullYear() + "-" + ("0" + (d.getMonth() + 1)).slice(-2) + "-" + ("0" + d.getDate()).slice(-2) }
+    var to = Date.now()
+    var from = Format.localDate(to - 366 * 86400000)
     withClass(sym, function(cls, onMissing) {
-      nasdaq("chart:" + sym + ":" + cls, "/quote/" + encodeURIComponent(sym) + "/chart?assetclass=" + cls + "&fromdate=" + ymd(from) + "&todate=" + ymd(to), function(body) {
+      nasdaq("chart:" + sym + ":" + cls, "/quote/" + encodeURIComponent(sym) + "/chart?assetclass=" + cls + "&fromdate=" + from + "&todate=" + Format.localDate(to), function(body) {
         var c = Market.parseChart(body, Date.now())
         if (c && c.points.length > 0) assign("charts", sym, c)
         else if (onMissing) onMissing()
@@ -203,14 +198,9 @@ Item {
     if (!enabled || !position) return
     var key = position.rawTicker
     if (!Market.isStale(news[key], 30 * 60000, Date.now()) || newsLoading[key]) return
-    var loading = {}
-    for (var k in newsLoading) loading[k] = newsLoading[k]
-    loading[key] = true
-    newsLoading = loading
+    newsLoading = Format.withKey(newsLoading, key, true)
     fetch("news:" + key, "news", Market.newsUrl(position), "application/rss+xml, application/xml, text/xml", "", function(body) {
-      var done = {}
-      for (var k2 in newsLoading) if (k2 !== key) done[k2] = newsLoading[k2]
-      newsLoading = done
+      newsLoading = Format.withKey(newsLoading, key, undefined)
       assign("news", key, { items: body === null ? [] : Market.parseNews(body, 8), fetchedAt: Date.now(), failed: body === null })
     })
   }
@@ -226,6 +216,7 @@ Item {
     if (!enabled || !_loaded) return
     var nowMs = Date.now()
     if (blockedUntil > nowMs) return
+    blockedUntil = 0
     var quoteAge = active ? 120000 : 600000
     // One pass per data kind, so every holding's quote lands before any
     // slower, less time-critical profile / earnings / chart request.

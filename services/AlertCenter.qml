@@ -2,6 +2,7 @@ import QtQuick
 import Quickshell
 import "../lib/Alerts.js" as Alerts
 import "../lib/Icons.js" as Icons
+import "../lib/Shell.js" as Shell
 
 // Desktop notifications. Re-evaluates the alert rules (lib/Alerts.js)
 // shortly after any input changes and sends whatever is new through the
@@ -56,12 +57,13 @@ Item {
     return alertId.indexOf(":down") !== -1 ? Icons.down : Icons.up
   }
 
+  // Fixture runs (smoke test, screenshots) log instead of notifying.
   function send(alert) {
-    var script = "if command -v omarchy-notification-send >/dev/null 2>&1; then\n"
-      + "  exec omarchy-notification-send --app-name \"Trading 212\" -g \"$4\" -u \"$3\" \"$1\" \"$2\" --exec omarchy-shell io.github.simasrazinskas.trading212 open\n"
-      + "fi\n"
-      + "exec notify-send -a \"Trading 212\" -u \"$3\" -- \"$1\" \"$2\"\n"
-    Quickshell.execDetached(["bash", "-c", script, "t212", alert.title, alert.body, alert.urgency, glyphFor(alert.id)])
+    if (service && service.fixtureDir !== "") {
+      console.log("trading212: alert " + alert.id + ": " + alert.title)
+      return
+    }
+    Quickshell.execDetached(Shell.notify(alert.title, alert.body, alert.urgency, glyphFor(alert.id), "io.github.simasrazinskas.trading212"))
   }
 
   // Test hook for the IPC `testAlert` command.

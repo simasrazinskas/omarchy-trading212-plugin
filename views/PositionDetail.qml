@@ -32,14 +32,7 @@ Scroller {
   readonly property var chart: sym !== "" ? market.charts[sym] || null : null
   readonly property string priceSymbol: position ? Format.currencySymbol(position.instrumentCurrency) : ""
   readonly property real livePrice: quote && quote.price !== null ? (quote.extPrice !== null ? quote.extPrice : quote.price) : (position ? position.price : 0)
-  readonly property var series: {
-    if (!chart) return Market.chartSeries(null, null, 0)
-    var days = chartRange === "1M" ? 31 : chartRange === "3M" ? 92 : chartRange === "6M" ? 183 : 366
-    var cutoff = service.now - days * 86400000
-    var pts = []
-    for (var i = 0; i < chart.points.length; i++) if (chart.points[i].ts >= cutoff) pts.push(chart.points[i])
-    return Market.chartSeries({ points: pts }, livePrice, service.now)
-  }
+  readonly property var series: Market.chartWindow(chart, chartRange, livePrice, service.now)
   readonly property var trades: position ? Activity.forTicker(service.activity.store.orders, position.rawTicker, 8) : []
   readonly property var dividends: position ? Activity.forTicker(service.activity.store.dividends, position.rawTicker, 0) : []
   readonly property var newsEntry: position ? market.news[position.rawTicker] || null : null
@@ -145,7 +138,7 @@ Scroller {
       ButtonGroup {
         id: rangeGroup
         focusable: false
-        options: ["1M", "3M", "6M", "1Y"]
+        options: Market.CHART_RANGES
         value: root.chartRange
         foreground: root.theme.foreground
         accent: root.theme.accent
@@ -265,10 +258,10 @@ Scroller {
         var upside = root.livePrice > 0 ? (pr.target / root.livePrice - 1) * 100 : null
         out.push({ label: "1y target", value: Format.formatFull(pr.target, "$"), sub: upside === null ? "" : Format.formatPercent(upside) + " upside", subTone: upside })
       }
-      if (pr && pr.yieldPct !== null && pr.yieldPct > 0) out.push({ label: "Yield", value: pr.yieldPct.toFixed(2) + "%", sub: pr.annualDividend !== null ? "$" + pr.annualDividend + "/yr" : "" })
+      if (pr && pr.yieldPct !== null && pr.yieldPct > 0) out.push({ label: "Yield", value: pr.yieldPct.toFixed(2) + "%", sub: pr.annualDividend !== null ? Format.formatFull(pr.annualDividend, "$") + " / yr" : "" })
       if (pr && pr.exDividend > 0) out.push({ label: "Ex-dividend", value: Format.shortDate(pr.exDividend), sub: Format.relativeDay(pr.exDividend, root.service.now) })
       var e = root.earnings
-      if (e && e.time > 0) out.push({ label: "Earnings", value: Format.shortDate(e.time), sub: Format.relativeDay(e.time, root.service.now) + (e.estimated ? " · est." : "") + (e.epsForecast !== null ? " · EPS $" + e.epsForecast : "") })
+      if (e && e.time > 0) out.push({ label: "Earnings", value: Format.shortDate(e.time), sub: Format.relativeDay(e.time, root.service.now) + (e.estimated ? " · est." : "") + (e.epsForecast !== null ? " · EPS " + Format.formatFull(e.epsForecast, "$") : "") })
       return out
     }
   }
@@ -290,7 +283,7 @@ Scroller {
         title: (modelData.side === "SELL" ? "Sold " : "Bought ") + Format.formatQuantity(modelData.quantity) + " @ " + Format.formatFull(modelData.price, root.priceSymbol)
         subtitle: Format.longDate(modelData.time) + (modelData.source ? " · " + modelData.source.toLowerCase().replace(/_/g, " ") : "")
         value: Format.formatFull(modelData.value, root.symbol)
-        subValue: modelData.realized !== null ? "P/L " + Format.formatSigned(modelData.realized, root.symbol) : ""
+        subValue: modelData.side === "SELL" && modelData.realized !== null ? "P/L " + Format.formatSigned(modelData.realized, root.symbol) : ""
         subTone: modelData.realized
       }
     }

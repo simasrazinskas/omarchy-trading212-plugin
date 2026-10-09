@@ -1,15 +1,15 @@
 import QtQuick
 import Quickshell.Io
+import "../lib/Shell.js" as Shell
 
 // One file under the plugin's state directory: read once per path (and on
-// demand), written atomically. The payload travels over the writer's stdin
-// as a single line — JSON.stringify never emits a raw newline — and lands
-// via a temp file + rename, so a crash mid-write never leaves half a file.
+// demand via reload), written atomically. The payload travels over the
+// writer's stdin as a single line — JSON.stringify never emits a raw
+// newline — and lands via a temp file + rename (lib/Shell.js writeFile).
 Item {
   id: root
 
   property string path: ""
-  property bool watch: false
   readonly property bool loaded: _loadedPath === path && path !== ""
 
   property string _loadedPath: ""
@@ -30,19 +30,14 @@ Item {
       return
     }
     writer.payload = text
-    writer.command = ["bash", "-c",
-      "IFS= read -r payload\n"
-      + "mkdir -p \"${1%/*}\" && printf '%s\\n' \"$payload\" > \"$1.tmp\" && mv \"$1.tmp\" \"$1\"\n",
-      "t212", path]
+    writer.command = Shell.writeFile(path)
     writer.running = true
   }
 
   FileView {
     id: view
     path: root.path
-    watchChanges: root.watch
     printErrors: false
-    onFileChanged: reload()
     onLoaded: {
       root._loadedPath = root.path
       root.textLoaded(text())

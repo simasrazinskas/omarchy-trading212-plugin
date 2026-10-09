@@ -1,12 +1,14 @@
 import QtQuick
 import "../lib/T212.js" as T212
 import "../lib/Activity.js" as Activity
+import "../lib/Format.js" as Format
 
 // The account's history — filled orders, dividends, cash transactions —
 // synced from the paginated /equity/history/* endpoints into a local store.
 //
 // The first sync backfills every page (the endpoints allow 6 requests a
-// minute each, 50 rows a page); later syncs fetch the newest page and stop
+// minute each, 50 rows a page), resuming from a stored cursor if it runs
+// past one sync's page budget; later syncs fetch the newest page and stop
 // as soon as a page overlaps what is already stored. The store persists to
 // disk, so a restart shows the full history instantly and re-syncs quietly.
 Item {
@@ -22,8 +24,12 @@ Item {
   readonly property bool fileLoaded: file.loaded
 
   property int _outstanding: 0
+  // Set when a page fails for a transient reason (rate limit, network);
+  // such a sync isn't stamped as synced, so it is retried soon.
+  property bool _failed: false
 
-  // Safety valve for the backfill: 40 pages × 50 rows per kind.
+  // Pages per kind per sync. A longer backfill resumes from its stored
+  // cursor on the next sync instead of starting over.
   readonly property int maxPages: 40
 
   readonly property var kinds: [
@@ -36,14 +42,19 @@ Item {
     store = Activity.emptyStore()
     syncing = false
     _outstanding = 0
+    _failed = false
     revision += 1
   }
 
   function sync() {
     if (syncing || !service) return
     syncing = true
+    _failed = false
     _outstanding = kinds.length
-    for (var i = 0; i < kinds.length; i++) fetchPage(kinds[i], kinds[i].path, 0)
+    // Without a stored cursor, walking down from the newest page *is* the
+    // backfill frontier; with one, the walk jumps there once it reaches
+    // rows that are already stored.
+    for (var i = 0; i < kinds.length; i++) fetchPage(kinds[i], kinds[i].path, 0, !store.cursors[kinds[i].kind])
   }
 
   function syncIfStale(maxAgeMs) {
@@ -51,43 +62,50 @@ Item {
     if (Date.now() - store.syncedAt >= maxAgeMs) sync()
   }
 
-  function fetchPage(spec, pagePath, depth) {
+  function fetchPage(spec, pagePath, depth, frontier) {
     var syncPath = path
     service.request("history:" + spec.kind + ":" + depth, "history-" + spec.kind, pagePath, function(raw) {
       // An environment switch mid-sync points the store at another account.
-      if (syncPath === root.path) root.onPage(spec, raw, depth)
+      if (syncPath === root.path) root.onPage(spec, raw, depth, frontier)
     }, false)
   }
 
-  function onPage(spec, raw, depth) {
-    var body = service.usableBody(raw, "history:" + spec.kind, "history-" + spec.kind, true, false)
-    if (body === null) {
-      finish()
-      return
-    }
-    var page = T212.parsePage(body)
-    if (!page.ok) {
+  function update(changes) {
+    var next = store
+    for (var key in changes) next = Format.withKey(next, key, changes[key])
+    store = next
+    revision += 1
+  }
+
+  function onPage(spec, raw, depth, frontier) {
+    var label = "history:" + spec.kind
+    var body = service.usableBody(raw, label, "history-" + spec.kind, true, false)
+    var page = body === null ? null : T212.parsePage(body)
+    if (page === null || !page.ok) {
+      // A missing permission is a settled answer; anything else isn't.
+      if (!service.missingScopes[label]) _failed = true
       finish()
       return
     }
     var items = []
     for (var i = 0; i < page.items.length; i++) items.push(spec.normalize(page.items[i]))
     var merged = Activity.merge(store[spec.kind], items)
+    var wasComplete = store.complete[spec.kind] === true
+    var changes = {}
+    changes[spec.kind] = merged.items
+    if (page.next === "") changes.complete = Format.withKey(store.complete, spec.kind, true)
+    if (frontier || page.next === "") changes.cursors = Format.withKey(store.cursors, spec.kind, page.next === "" ? undefined : page.next)
+    update(changes)
 
-    var next = {}
-    for (var key in store) next[key] = store[key]
-    next[spec.kind] = merged.items
-    var complete = {}
-    for (var c in store.complete) complete[c] = store.complete[c]
-    if (page.next === "") complete[spec.kind] = true
-    next.complete = complete
-    store = next
-    revision += 1
-
-    // Keep paging while backfilling, or while every row on this page was
-    // new (more new rows may sit on the next one).
-    var more = page.next !== "" && depth + 1 < maxPages && (merged.overlap === 0 || !store.complete[spec.kind])
-    if (more) fetchPage(spec, page.next, depth + 1)
+    if (page.next === "" || depth + 1 >= maxPages) {
+      finish()
+      return
+    }
+    // Rows past this page are new while the page itself was all new, or
+    // while the backfill is unfinished.
+    if (merged.overlap === 0 || frontier) fetchPage(spec, page.next, depth + 1, frontier)
+    else if (!wasComplete && store.cursors[spec.kind]) fetchPage(spec, store.cursors[spec.kind], depth + 1, true)
+    else if (!wasComplete) fetchPage(spec, page.next, depth + 1, true)
     else finish()
   }
 
@@ -96,11 +114,7 @@ Item {
     if (_outstanding > 0) return
     _outstanding = 0
     syncing = false
-    var next = {}
-    for (var key in store) next[key] = store[key]
-    next.syncedAt = Date.now()
-    store = next
-    revision += 1
+    if (!_failed) update({ syncedAt: Date.now() })
     file.write(JSON.stringify(store))
   }
 

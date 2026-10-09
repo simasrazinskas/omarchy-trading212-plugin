@@ -4,6 +4,7 @@ import qs.Ui
 import "../components"
 import "../lib/Format.js" as Format
 import "../lib/Cash.js" as Cash
+import "../lib/Portfolio.js" as Portfolio
 import "../lib/Icons.js" as Icons
 
 // Cash tab: where the money outside investments sits (spending pot, trading
@@ -31,26 +32,9 @@ Scroller {
     for (var i = 0; i < src.length; i++) out.push({ label: src[i].label, value: src[i].spend, count: src[i].count, key: src[i].key })
     return out
   }
-  // Pot balance from snapshots that recorded it, plus the live reading.
-  readonly property var potSeries: {
-    var pts = []
-    var h = service.history
-    for (var i = 0; i < h.length; i++)
-      if (h[i].pot !== null && h[i].date !== service.today) pts.push({ ts: h[i].ts, value: h[i].pot + h[i].cash, date: h[i].date })
-    if (summary) pts.push({ ts: service.now, value: summary.pot + summary.cash, date: "" })
-    if (pts.length === 0) return { points: [], min: 0, max: 0, firstTs: 0, lastTs: 0, changeAbs: 0 }
-    var min = pts[0].value
-    var max = pts[0].value
-    for (var j = 1; j < pts.length; j++) {
-      min = Math.min(min, pts[j].value)
-      max = Math.max(max, pts[j].value)
-    }
-    return { points: pts, min: min, max: max, firstTs: pts[0].ts, lastTs: pts[pts.length - 1].ts, changeAbs: pts[pts.length - 1].value - pts[0].value }
-  }
+  readonly property var potSeries: Portfolio.potSeries(service.history, summary, service.now)
+  readonly property bool transfersNever: service.cashRules.transferMin >= Cash.NEVER
 
-  function move(dy) { scrollBy(dy * Style.space(48)) }
-  function activate() {}
-  function back() { return false }
   function textKey(t) {
     if (t === "c") {
       host.persistSetting("cashChart", chartMode === "days" ? "months" : "days")
@@ -351,8 +335,8 @@ Scroller {
 
   Note {
     theme: root.theme
-    text: "Trading 212 labels card payments as plain withdrawals, so spending is estimated: withdrawals of a whole amount ≥ "
-      + Format.formatBar(root.service.cashRules.transferMin, root.symbol) + " count as bank transfers, deposits under "
-      + Format.formatFull(root.service.cashRules.cashbackMax, root.symbol) + " as cashback. Adjust in Settings."
+    text: "Trading 212 labels card payments as plain withdrawals, so spending is estimated: "
+      + (root.transfersNever ? "every withdrawal counts as spending" : "withdrawals of a whole amount ≥ " + Format.formatBar(root.service.cashRules.transferMin, root.symbol) + " count as bank transfers")
+      + ", deposits under " + Format.formatFull(root.service.cashRules.cashbackMax, root.symbol) + " as cashback. Adjust in Settings."
   }
 }

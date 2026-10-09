@@ -16,14 +16,11 @@ Scroller {
 
   readonly property bool editorFocused: credentialField.activeFocus
 
-  function move(dy) { scrollBy(dy * Style.space(48)) }
-  function activate() {}
   function back() {
     if (root.service.keyMissing || root.service.authFailed) return false
     host.showSetup(false)
     return true
   }
-  function textKey(t) { return false }
   function focusEditor() { credentialField.forceActiveFocus() }
 
   function save() {

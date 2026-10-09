@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "io.github.simasrazinskas.trading212",
   "name": "Trading 212",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "author": "Simas Razinskas",
   "license": "MIT",
   "description": "Trading 212 portfolio monitor for the Omarchy bar: account value with spending pot, P/L and daily change at a glance; a tabbed panel with holdings, market data, spending, activity, insights and alerts.",

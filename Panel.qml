@@ -1,50 +1,32 @@
 import QtQuick
-import QtQuick.Layouts
 import Quickshell
 import Quickshell.Io
 import qs.Commons
 import qs.Ui
 import "components"
 import "views"
-import "lib/Format.js" as Format
 import "lib/Bar.js" as Bar
-import "lib/Icons.js" as Icons
 
 // Trading 212 bar widget. The bar shows one of six display modes (right
 // click cycles, middle click refreshes); left click opens a tabbed panel:
 // Overview · Holdings · Cash · Activity · Insights, plus Settings.
 //
-// This file is the host: bar label, panel frame, tab routing, keyboard map
-// and IPC. Data lives in Service.qml, presentation in views/, reusable
-// pieces in components/, and all pure logic in lib/ (node-tested).
+// This file is the host: bar label, settings persistence, the popup frame
+// and IPC. The panel's contents are views/Dashboard.qml, data lives in
+// Service.qml, reusable pieces in components/, and all pure logic in lib/
+// (node-tested).
 Panel {
   id: root
   moduleName: "io.github.simasrazinskas.trading212"
   ipcTarget: "io.github.simasrazinskas.trading212"
   manageIpc: false
 
-  readonly property var tabs: [
-    { value: "overview", label: "Overview", icon: Icons.overview },
-    { value: "holdings", label: "Holdings", icon: Icons.chart },
-    { value: "cash", label: "Cash", icon: Icons.wallet },
-    { value: "activity", label: "Activity", icon: Icons.list },
-    { value: "insights", label: "Insights", icon: Icons.insights }
-  ]
+  readonly property string mode: Bar.normalizeMode(setting("mode", "invested"))
 
-  // Named handles for the view Components, where a bare `service: service`
-  // would resolve to the view's own property rather than the id here.
+  // Named handles for children, where a bare `service: service` would
+  // resolve to the child's own property rather than the id here.
   readonly property var dataService: service
   readonly property var panelTheme: theme
-
-  property string tab: "overview"
-  property bool settingsOpen: false
-  property bool setupRequested: false
-
-  readonly property string mode: Bar.normalizeMode(setting("mode", "invested"))
-  readonly property bool needsSetup: service.keyMissing || service.authFailed
-  readonly property bool setupShown: needsSetup || setupRequested
-  readonly property string view: setupShown ? "setup" : settingsOpen ? "settings" : tab
-  readonly property bool editorFocused: viewLoader.item && viewLoader.item.editorFocused === true
 
   readonly property var barState: ({
     keyMissing: service.keyMissing,
@@ -52,24 +34,12 @@ Panel {
     error: service.lastError,
     data: service.summary,
     daily: service.daily,
-    spend: service.spending ? service.spending.thisMonth.spend : null
+    spend: service.spending ? service.spending.thisMonth.spend : null,
+    spendUnavailable: service.missingScopes["history:transactions"] === true
   })
 
   // Vertical bars have no room for amounts: a compact direction badge.
   readonly property var pieces: button.vertical ? Bar.verticalLabel(barState) : Bar.label(mode, barState)
-
-  readonly property string statusText: {
-    if (service.keyMissing) return "API KEY REQUIRED"
-    if (service.authFailed) return service.lastError.toUpperCase()
-    if (service.refreshing) return "REFRESHING…"
-    if (service.lastError !== "") return service.lastError.toUpperCase()
-    if (service.lastUpdated.getTime() > 0) {
-      var parts = [service.environment.toUpperCase(), Bar.modeTitle(mode).toUpperCase(), Format.stamp(service.lastUpdated.getTime(), service.now)]
-      if (service.activity.syncing) parts.push("SYNCING")
-      return parts.join(" · ")
-    }
-    return "CONNECTING…"
-  }
 
   Theme {
     id: theme
@@ -79,46 +49,8 @@ Panel {
     fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
   }
 
-  // ---- Host API used by the views.
-
   function cycleMode() {
     persistSetting("mode", Bar.nextMode(mode))
-  }
-
-  function selectTab(value) {
-    settingsOpen = false
-    setupRequested = false
-    tab = value
-  }
-
-  function stepTab(direction) {
-    var index = 0
-    for (var i = 0; i < tabs.length; i++) if (tabs[i].value === tab) index = i
-    selectTab(tabs[(index + direction + tabs.length) % tabs.length].value)
-  }
-
-  function openPosition(rawTicker) {
-    if (!rawTicker) return
-    selectTab("holdings")
-    Qt.callLater(function() {
-      if (viewLoader.item && typeof viewLoader.item.open === "function") viewLoader.item.open(rawTicker)
-    })
-  }
-
-  function openUrl(url) {
-    if (/^https:\/\//.test(String(url))) Quickshell.execDetached(["xdg-open", String(url)])
-  }
-
-  function showSettings(show) {
-    settingsOpen = show
-    if (show) setupRequested = false
-  }
-
-  function showSetup(show) {
-    setupRequested = show
-    if (show) Qt.callLater(function() {
-      if (viewLoader.item && typeof viewLoader.item.focusEditor === "function") viewLoader.item.focusEditor()
-    })
   }
 
   // Mirrors the clock's format cycling: apply locally for an instant change,
@@ -154,10 +86,7 @@ Panel {
 
   onOpenedChanged: if (opened) {
     service.refreshIfStale()
-    Qt.callLater(function() {
-      if (root.setupShown && viewLoader.item && typeof viewLoader.item.focusEditor === "function") viewLoader.item.focusEditor()
-      else keyCatcher.forceActiveFocus()
-    })
+    Qt.callLater(dashboard.focusInitial)
   }
 
   Service {
@@ -175,21 +104,14 @@ Panel {
     function toggle(): void { root.toggle() }
     function refresh(): string { service.refreshAll(); return "ok" }
     function sync(): string { service.activity.sync(); return "ok" }
-    function setKey(credential: string): string {
-      service.storeCredential(credential)
-      return service.saveError === "" ? "ok" : service.saveError
-    }
+    function setKey(credential: string): string { return service.storeCredential(credential) }
     function cycle(): string { root.cycleMode(); return root.mode }
     function mode(): string { return root.mode }
     function tab(name: string): string {
-      for (var i = 0; i < root.tabs.length; i++) {
-        if (root.tabs[i].value === name) {
-          root.selectTab(name)
-          root.open()
-          return name
-        }
-      }
-      return "unknown tab: " + name
+      if (!dashboard.hasTab(name)) return "unknown tab: " + name
+      dashboard.selectTab(name)
+      root.open()
+      return name
     }
     function position(ticker: string): string {
       var wanted = String(ticker).toUpperCase()
@@ -197,13 +119,13 @@ Panel {
         var p = service.positions[i]
         if (p.ticker === wanted || p.rawTicker === ticker) {
           root.open()
-          root.openPosition(p.rawTicker)
+          dashboard.openPosition(p.rawTicker)
           return p.rawTicker
         }
       }
       return "not held: " + ticker
     }
-    function settings(): string { root.open(); root.showSettings(true); return "ok" }
+    function settings(): string { root.open(); dashboard.showSettings(true); return "ok" }
     function testAlert(): string { service.alerts.sendTest(); return "ok" }
     function status(): string {
       return JSON.stringify({
@@ -291,25 +213,6 @@ Panel {
     }
   }
 
-  // ---- Views.
-  Component { id: overviewView; OverviewView { service: root.dataService; theme: root.panelTheme; host: root } }
-  Component { id: holdingsView; HoldingsView { service: root.dataService; theme: root.panelTheme; host: root } }
-  Component { id: cashView; CashView { service: root.dataService; theme: root.panelTheme; host: root } }
-  Component { id: activityView; ActivityView { service: root.dataService; theme: root.panelTheme; host: root } }
-  Component { id: insightsView; InsightsView { service: root.dataService; theme: root.panelTheme; host: root } }
-  Component { id: settingsView; SettingsView { service: root.dataService; theme: root.panelTheme; host: root } }
-  Component { id: setupView; SetupView { service: root.dataService; theme: root.panelTheme; host: root } }
-
-  function componentFor(view) {
-    if (view === "setup") return setupView
-    if (view === "settings") return settingsView
-    if (view === "holdings") return holdingsView
-    if (view === "cash") return cashView
-    if (view === "activity") return activityView
-    if (view === "insights") return insightsView
-    return overviewView
-  }
-
   // ---- Panel.
   KeyboardPanel {
     id: panel
@@ -317,133 +220,17 @@ Panel {
     owner: root
     bar: root.bar
     open: root.opened
-    focusTarget: keyCatcher
+    focusTarget: dashboard.keyCatcher
     contentWidth: panel.fittedContentWidth(Style.space(500))
-    contentHeight: panel.fittedContentHeight(Style.space(720), Style.space(720))
+    contentHeight: panel.fittedContentHeight(dashboard.implicitHeight, dashboard.fullHeight)
 
-    PanelKeyCatcher {
-      id: keyCatcher
+    Dashboard {
+      id: dashboard
       anchors.fill: parent
-      blocked: root.editorFocused
-      onCloseRequested: root.close()
-      onTabRequested: function(direction) { root.switchPanel(direction) }
-      onMoveRequested: function(dx, dy) {
-        if (dy !== 0 && viewLoader.item) viewLoader.item.move(dy)
-        else if (dx !== 0 && !root.setupShown && !root.settingsOpen) root.stepTab(dx)
-      }
-      onActivateRequested: if (viewLoader.item) viewLoader.item.activate()
-      onTextKey: function(text) {
-        if (text === "\b" || text === "\u007f") {
-          if (viewLoader.item && viewLoader.item.back()) return
-          if (root.settingsOpen) root.showSettings(false)
-          return
-        }
-        if (viewLoader.item && viewLoader.item.textKey(text)) return
-        var digit = parseInt(text, 10)
-        if (digit >= 1 && digit <= root.tabs.length) root.selectTab(root.tabs[digit - 1].value)
-        else if (text === "r" || text === "R") service.refreshAll()
-        else if (text === ",") root.showSettings(!root.settingsOpen)
-      }
-
-      ColumnLayout {
-        anchors.fill: parent
-        spacing: Style.space(12)
-
-        // ---- Header: title + status, settings and refresh on the right.
-        Item {
-          Layout.fillWidth: true
-          implicitHeight: Math.max(heroLabels.implicitHeight, headerButtons.implicitHeight)
-
-          Column {
-            id: heroLabels
-            anchors.left: parent.left
-            anchors.right: headerButtons.left
-            anchors.rightMargin: Style.space(12)
-            anchors.verticalCenter: parent.verticalCenter
-            spacing: Style.space(3)
-
-            Text {
-              text: "Trading 212"
-              color: theme.foreground
-              font.family: theme.fontFamily
-              font.pixelSize: Style.font.title
-              font.bold: true
-            }
-
-            Text {
-              width: parent.width
-              text: root.statusText
-              color: (service.authFailed || (service.lastError !== "" && !service.refreshing)) ? theme.urgent : theme.dim
-              font.family: theme.fontFamily
-              font.pixelSize: Style.font.bodySmall
-              elide: Text.ElideRight
-            }
-          }
-
-          Row {
-            id: headerButtons
-            anchors.right: parent.right
-            anchors.verticalCenter: parent.verticalCenter
-            spacing: Style.space(4)
-
-            PanelActionButton {
-              visible: !root.needsSetup
-              iconText: Icons.settings
-              tooltipText: "Settings (,)"
-              foreground: theme.foreground
-              fontFamily: theme.fontFamily
-              onClicked: root.showSettings(!root.settingsOpen)
-            }
-
-            PanelActionButton {
-              iconText: service.refreshing || service.activity.syncing ? Icons.sync : Icons.refresh
-              tooltipText: "Refresh everything (r)"
-              foreground: theme.foreground
-              fontFamily: theme.fontFamily
-              enabled: !service.refreshing
-              onClicked: service.refreshAll()
-            }
-          }
-        }
-
-        // ---- Tabs.
-        Row {
-          id: tabBar
-          visible: !root.setupShown && !root.settingsOpen
-          Layout.fillWidth: true
-          spacing: Style.space(4)
-
-          readonly property real cellWidth: (width - spacing * (root.tabs.length - 1)) / root.tabs.length
-
-          Repeater {
-            model: root.tabs
-
-            Button {
-              required property var modelData
-              required property int index
-              width: tabBar.cellWidth
-              text: modelData.label
-              tooltipText: modelData.label + " (" + (index + 1) + ")"
-              selected: root.tab === modelData.value
-              bordered: true
-              foreground: theme.foreground
-              accent: theme.accent
-              fontFamily: theme.fontFamily
-              fontSize: Style.font.caption
-              horizontalPadding: Style.space(4)
-              verticalPadding: Style.space(4)
-              onClicked: root.selectTab(modelData.value)
-            }
-          }
-        }
-
-        Loader {
-          id: viewLoader
-          Layout.fillWidth: true
-          Layout.fillHeight: true
-          sourceComponent: root.componentFor(root.view)
-        }
-      }
+      panel: root
+      service: root.dataService
+      theme: root.panelTheme
+      mode: root.mode
     }
   }
 }

@@ -6,6 +6,7 @@ import "lib/Format.js" as Format
 import "lib/T212.js" as T212
 import "lib/Portfolio.js" as Portfolio
 import "lib/Cash.js" as Cash
+import "lib/Shell.js" as Shell
 
 // Data layer. Owns everything that talks to Trading 212 — account summary,
 // positions, pending orders, pies — plus the daily snapshot history, and
@@ -16,6 +17,10 @@ import "lib/Cash.js" as Cash
 // libsecret); every request looks it up with secret-tool at request time
 // and hands the Authorization header to curl over stdin (`--config -`), so
 // the secret never appears in a process argv or on disk.
+//
+// With T212_FIXTURES=<dir> in the environment every request is answered
+// from files instead (lib/Shell.js fixtureFetch) and the keyring is never
+// touched — the QML smoke test and the README screenshots run that way.
 Item {
   id: root
 
@@ -52,6 +57,7 @@ Item {
   property alias market: marketData
   property alias alerts: alertCenter
 
+  readonly property string fixtureDir: Quickshell.env("T212_FIXTURES") || ""
   readonly property string stateBase: (Quickshell.env("XDG_STATE_HOME") || Quickshell.env("HOME") + "/.local/state") + "/omarchy-trading212"
   readonly property string environment: String(setting("environment", "live")).toLowerCase() === "demo" ? "demo" : "live"
   readonly property int refreshIntervalSec: intSetting("refreshIntervalSec", 60, 15, 3600)
@@ -63,7 +69,9 @@ Item {
   readonly property var realizedTimeline: Portfolio.realizedTimeline(accountHistory.store.orders, summary ? summary.realized : null)
   readonly property var daily: Portfolio.dailyChange(history, summary, today, realizedTimeline)
   readonly property var cashRules: Cash.rulesFrom({ transferMin: setting("transferMin", 100), cashbackMax: setting("cashbackMax", 1) })
-  readonly property var spending: accountHistory.hasData
+  // Null until transactions are synced, and for good without the
+  // permission to read them (the Cash tab says which).
+  readonly property var spending: accountHistory.hasData && missingScopes["history:transactions"] !== true
     ? Cash.analyze(accountHistory.store.transactions, accountHistory.store.orders, now, cashRules)
     : null
 
@@ -81,8 +89,23 @@ Item {
   // Environment switch invalidates everything from the other account — and
   // its rate-limit buckets. The other environment's disk cache fills the
   // gap until the first fetch lands.
-  onEnvironmentChanged: {
+  //
+  // The change signal also fires on the first evaluation at startup, often
+  // from inside some binding that read `environment`; resetting there
+  // would rewrite that binding's own inputs mid-evaluation. So the reset
+  // runs deferred, and only for an actual switch.
+  property string _activeEnvironment: ""
+  Component.onCompleted: _activeEnvironment = environment
+  onEnvironmentChanged: Qt.callLater(applyEnvironment)
+
+  function applyEnvironment() {
+    if (environment === _activeEnvironment) return
+    _activeEnvironment = environment
     summary = null
+    history = []
+    _pendingSnapshot = null
+    refreshing = false
+    positionsRefreshing = false
     positions = []
     positionsLoaded = false
     pendingOrders = []
@@ -97,11 +120,9 @@ Item {
     missingScopes = {}
     api.clear()
     api._lastStart = {}
-    Qt.callLater(function() {
-      cacheFile.reload()
-      historyFile.reload()
-      refresh(true)
-    })
+    cacheFile.reload()
+    historyFile.reload()
+    refresh(true)
   }
 
   // ---- Trading 212 request plumbing.
@@ -124,23 +145,22 @@ Item {
   }
 
   function fetchCommand(url) {
-    // The lookup is bounded: a locked keyring can make secret-tool block on
-    // an unlock prompt, and a never-exiting fetch would wedge the queue.
-    var script = "cred=$(timeout 5 secret-tool lookup service trading212 account \"$1\" 2>/dev/null)\n"
-      + "if [ -z \"$cred\" ]; then echo \"__T212_STATUS__ no_key\"; exit 0; fi\n"
-      + "case \"$cred\" in\n"
-      + "  *:*) auth=\"Basic $(printf %s \"$cred\" | base64 | tr -d '\\n')\" ;;\n"
-      + "  *) auth=\"$cred\" ;;\n"
-      + "esac\n"
-      + "printf 'header = \"Authorization: %s\"\\n' \"$auth\" | curl -sS --compressed --max-time 15 --config - -w '\\n__T212_HTTP__ %{http_code}' \"$2\" 2>/dev/null"
-      + " || echo \"__T212_STATUS__ curl_error\"\n"
-    return ["bash", "-c", script, "t212", environment, url]
+    return fixtureDir !== "" ? Shell.fixtureFetch(fixtureDir, url) : Shell.apiFetch(environment, url)
   }
 
   // `path` is relative to the host and starts with /api/v0 — the form the
-  // history endpoints hand back as nextPagePath.
+  // history endpoints hand back as nextPagePath. A response that lands
+  // after an environment switch belongs to the other account and is
+  // dropped, so it can't leak into this one's cache or history.
   function request(id, key, path, done, force) {
-    api.enqueue({ id: environment + ":" + id, key: key, command: fetchCommand(apiHost + path), done: done, force: force === true })
+    var env = environment
+    api.enqueue({
+      id: env + ":" + id,
+      key: key,
+      command: fetchCommand(apiHost + path),
+      force: force === true,
+      done: function(raw) { if (env === root.environment) done(raw) }
+    })
   }
 
   // Shared status handling; returns the body when the response is usable.
@@ -165,6 +185,9 @@ Item {
     authFailed = false
     if (result.kind === "scope") {
       setScope(label, true)
+      // Without Account / Portfolio the widget has nothing to show at all;
+      // say so instead of loading forever.
+      if (primary) lastError = "The API key lacks the " + (label === "summary" ? "Account" : "Portfolio") + " permission"
       return null
     }
     if (result.kind === "rate") {
@@ -186,12 +209,7 @@ Item {
   }
 
   function setScope(label, missing) {
-    if ((missingScopes[label] === true) === missing) return
-    var next = {}
-    for (var key in missingScopes) next[key] = missingScopes[key]
-    if (missing) next[label] = true
-    else delete next[label]
-    missingScopes = next
+    if ((missingScopes[label] === true) !== missing) missingScopes = Format.withKey(missingScopes, label, missing ? true : undefined)
   }
 
   // ---- Summary + positions: the core poll.
@@ -285,11 +303,8 @@ Item {
       var detail = T212.parsePieDetail(body)
       if (!detail.ok) return
       detail.fetchedAt = Date.now()
-      var details = {}
-      for (var key in _pieDetails) details[key] = _pieDetails[key]
-      details[id] = detail
-      _pieDetails = details
-      pies = T212.mergePies(pies, details)
+      _pieDetails = Format.withKey(_pieDetails, id, detail)
+      pies = T212.mergePies(pies, _pieDetails)
     }, false)
   }
 
@@ -317,23 +332,26 @@ Item {
   }
 
   // ---- Credential storage. The secret travels over the storing process's
-  //      stdin, never through argv or a file; bash reads one line and
-  //      re-pipes it so no trailing newline ends up inside the secret.
+  //      stdin, never through argv or a file. Returns "ok" once the store
+  //      has started, otherwise why it didn't.
   function storeCredential(credential) {
     var checked = T212.validateCredential(credential)
     if (!checked.ok) {
       saveError = checked.error
-      return
+      return checked.error
     }
-    if (storeProcess.running) return
-    savingKey = true
+    if (storeProcess.running) return "A key is already being saved"
     saveError = ""
+    if (fixtureDir !== "") {
+      keyMissing = false
+      authFailed = false
+      return "ok"
+    }
+    savingKey = true
     storeProcess.secret = checked.cred
-    var script = "IFS= read -r cred\n"
-      + "[ -n \"$cred\" ] || exit 1\n"
-      + "printf %s \"$cred\" | timeout 15 secret-tool store --label=\"Trading 212 API ($1)\" service trading212 account \"$1\"\n"
-    storeProcess.command = ["bash", "-c", script, "t212", environment]
+    storeProcess.command = Shell.storeCredential(environment)
     storeProcess.running = true
+    return "ok"
   }
 
   Process {
@@ -381,35 +399,44 @@ Item {
     }
   }
 
-  // Snapshot history, watched so the daily rewrite shows up live.
+  // Snapshot history. Reloaded after each of our own writes rather than
+  // watched: the write is a rename, which file watchers handle unevenly.
   StateFile {
     id: historyFile
     path: root.stateBase + "/history-" + root.environment + ".jsonl"
-    watch: true
-    onTextLoaded: function(text) { root.history = Portfolio.parseHistory(text) }
+    onTextLoaded: function(text) {
+      root.history = Portfolio.parseHistory(text)
+      if (root._pendingSnapshot !== null) {
+        var data = root._pendingSnapshot
+        root._pendingSnapshot = null
+        root.recordSnapshot(data)
+      }
+    }
   }
+
+  // A summary that arrives before the history has loaded waits for it:
+  // writing blind would reset today's opening values to the current ones.
+  property var _pendingSnapshot: null
 
   // One line per day holding the day's latest reading: today's line is
   // replaced on every successful fetch, so a day closes at its final value
   // and the open* fields carry the day's first reading forward.
   function recordSnapshot(data) {
-    var stamp = new Date()
-    var date = Format.localDate(stamp.getTime())
-    var line = Portfolio.snapshotLine(date, stamp.getTime(), data, Portfolio.entryForDate(history, date))
-    var script = "f=\"$1\"\n"
-      + "mkdir -p \"${f%/*}\"\n"
-      + "if [ -f \"$f\" ] && tail -n 1 \"$f\" | grep -q \"\\\"date\\\":\\\"$2\\\"\"; then\n"
-      + "  sed -i '$ d' \"$f\"\n"
-      + "fi\n"
-      + "printf '%s\\n' \"$3\" >> \"$f\"\n"
-    if (snapshotProcess.running) return
-    snapshotProcess.command = ["bash", "-c", script, "t212", historyFile.path, date, line]
+    if (!historyFile.loaded || snapshotProcess.running) {
+      _pendingSnapshot = data
+      return
+    }
+    var stamp = Date.now()
+    var date = Format.localDate(stamp)
+    var line = Portfolio.snapshotLine(date, stamp, data, Portfolio.entryForDate(history, date))
+    snapshotProcess.command = Shell.upsertSnapshot(historyFile.path, date, line)
     snapshotProcess.running = true
   }
 
   Process {
     id: snapshotProcess
     running: false
+    onExited: historyFile.reload()
   }
 
   // ---- Sub-services.
@@ -426,6 +453,7 @@ Item {
     active: root.panelOpen
     positions: root.positions
     path: root.stateBase + "/market.json"
+    fixtureDir: root.fixtureDir
   }
 
   AlertCenter {

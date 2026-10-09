@@ -4,6 +4,7 @@ import qs.Ui
 import "../components"
 import "../lib/Format.js" as Format
 import "../lib/Alerts.js" as Alerts
+import "../lib/Cash.js" as Cash
 
 // In-panel settings. The shell has no settings UI for plugin widgets, so
 // everything configurable lives here and persists to the widget's entry in
@@ -20,13 +21,10 @@ Scroller {
   readonly property var rules: Alerts.settingsFrom(host.settings)
   readonly property var scopes: Object.keys(service.missingScopes)
 
-  function move(dy) { scrollBy(dy * Style.space(48)) }
-  function activate() {}
   function back() {
     host.showSettings(false)
     return true
   }
-  function textKey(t) { return false }
 
   Item {
     width: parent.width
@@ -154,10 +152,9 @@ Scroller {
   Choice {
     theme: root.theme
     label: "Spending: treat whole withdrawals as bank transfers from"
-    options: [
-      { value: "50", label: "€50" }, { value: "100", label: "€100" }, { value: "250", label: "€250" },
-      { value: "500", label: "€500" }, { value: "1000000000", label: "Never" }
-    ]
+    options: Cash.TRANSFER_CHOICES.map(function(v) {
+      return { value: String(v), label: v >= Cash.NEVER ? "Never" : root.service.symbol + v }
+    })
     value: String(root.service.cashRules.transferMin)
     hint: "Card payments and bank withdrawals look the same in the API. Round amounts at or above this are counted as transfers, everything else as spending."
     onPicked: function(value) { root.host.persistSetting("transferMin", Number(value)) }

@@ -119,7 +119,9 @@ Item {
     Note {
       visible: !root.service.positionsLoaded
       theme: root.theme
-      text: "Loading positions…"
+      text: root.service.missingScopes["positions"]
+        ? "Your API key lacks the Portfolio permission — regenerate it with Portfolio enabled to list holdings."
+        : "Loading positions…"
     }
 
     Repeater {

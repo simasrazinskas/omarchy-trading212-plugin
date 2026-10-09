@@ -29,10 +29,12 @@ Scroller {
   readonly property var movers: Portfolio.movers(service.positions, function(p) { return root.market.quotes[Market.nasdaqSymbol(p)] || null })
   readonly property var events: Market.upcomingEvents(service.positions, market.profiles, market.earnings, service.now, 21)
   readonly property bool sessionOpen: /^open$/i.test(market.usMarketStatus)
+  // The account currency against the dollar (EUR/USD, GBP/USD…); for a
+  // dollar account, against the euro instead.
+  readonly property string fxQuote: summary && summary.currency === "USD" ? "EUR" : "USD"
+  readonly property string fxBase: summary && summary.currency !== "" ? summary.currency : "EUR"
+  readonly property var fxRate: Market.crossRate(fxBase, fxQuote, market.fx)
 
-  function move(dy) { scrollBy(dy * Style.space(48)) }
-  function activate() {}
-  function back() { return false }
   function textKey(t) {
     if (t === "m") {
       host.persistSetting("chartMetric", Portfolio.METRICS[(Portfolio.METRICS.indexOf(metric) + 1) % Portfolio.METRICS.length])
@@ -93,19 +95,7 @@ Scroller {
     width: parent.width
     theme: root.theme
     symbol: root.symbol
-    groups: {
-      var s = root.summary
-      if (!s || !(s.total > 0)) return []
-      var parts = [
-        { key: "Investments", value: s.value },
-        { key: "Spending pot", value: s.pot },
-        { key: "Cash", value: s.cash }
-      ]
-      var out = []
-      for (var i = 0; i < parts.length; i++)
-        if (parts[i].value > 0.005) out.push({ key: parts[i].key, value: parts[i].value, weight: parts[i].value / s.total * 100 })
-      return out
-    }
+    groups: Portfolio.composition(root.summary)
   }
 
   StatGrid {
@@ -211,7 +201,7 @@ Scroller {
 
   // ---- Market context.
   Row {
-    visible: root.market.enabled && (root.market.usMarketStatus !== "" || root.market.mood !== null || root.market.fx !== null)
+    visible: root.market.enabled && (root.market.usMarketStatus !== "" || root.market.mood !== null || root.fxRate !== null)
     width: parent.width
     spacing: Style.space(20)
 
@@ -228,10 +218,10 @@ Scroller {
       value: root.market.mood ? Math.round(root.market.mood.score) + " · " + Market.moodLabel(root.market.mood.rating) : ""
     }
     Stat {
-      visible: root.market.fx !== null && root.market.fx.rates.USD !== undefined
+      visible: root.fxRate !== null
       theme: root.theme
-      label: "EUR/USD"
-      value: root.market.fx && root.market.fx.rates.USD ? root.market.fx.rates.USD.toFixed(4) : ""
+      label: root.fxBase + "/" + root.fxQuote
+      value: root.fxRate !== null ? root.fxRate.toFixed(4) : ""
     }
   }
 

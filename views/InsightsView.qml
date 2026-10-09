@@ -27,7 +27,7 @@ Scroller {
   readonly property var trading: Activity.tradingStats(store.orders, service.now)
   readonly property var perf: Portfolio.performance(summary, dividends.total, trading.fees)
   readonly property var concentration: Portfolio.concentration(service.positions)
-  readonly property var income: Market.projectedIncome(service.positions, market.profiles, market.fx)
+  readonly property var income: Market.projectedIncome(service.positions, market.profiles, market.fx, summary && summary.currency ? summary.currency : "EUR")
   readonly property string groupBy: {
     var g = host.setting("allocationBy", "holding")
     return g === "sector" || g === "currency" ? g : "holding"
@@ -46,9 +46,6 @@ Scroller {
     return Portfolio.topGroups(groups, 7)
   }
 
-  function move(dy) { scrollBy(dy * Style.space(48)) }
-  function activate() {}
-  function back() { return false }
   function textKey(t) {
     if (t === "a") {
       var order = ["holding", "sector", "currency"]
