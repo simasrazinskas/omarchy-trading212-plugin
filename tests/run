@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Unit tests, manifest validation, and — where Quickshell and the Omarchy
+# shell are installed — the offscreen QML smoke test (~45 s; skip it with
+# T212_SKIP_QML=1).
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -8,4 +11,9 @@ node --test "$root/tests"/*.test.js
 if command -v omarchy-plugin-validate >/dev/null 2>&1; then
   omarchy-plugin-validate "$root"
   echo "manifest: valid"
+fi
+
+if [[ "${T212_SKIP_QML:-}" != "1" ]] && command -v quickshell >/dev/null 2>&1 \
+    && [[ -d "${OMARCHY_SHELL_ROOT:-/usr/share/omarchy/shell}/Commons" ]]; then
+  "$root/tests/qml-smoke"
 fi
