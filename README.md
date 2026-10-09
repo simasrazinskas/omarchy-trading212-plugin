@@ -5,9 +5,17 @@ Your [Trading 212](https://www.trading212.com/) account in the [Omarchy](https:/
 Built for the Omarchy 4.x shell (`omarchy-shell` / Quickshell) as a `bar-widget` plugin. It does not work on Omarchy ≤ 3.x (Waybar).
 
 <p>
-  <img src="preview-live.png" width="48%" alt="Detail panel with live account data">
-  <img src="preview.png" width="48%" alt="Detail panel in setup state with the API key input">
+  <img src="docs/overview.png" width="32%" alt="Overview tab: account value split into investments, spending pot and cash, today's move, the return graph and today's movers">
+  <img src="docs/position.png" width="32%" alt="A holding's page: price chart, 52-week range, your position and company data">
+  <img src="docs/cash.png" width="32%" alt="Cash tab: spending this month against last month, daily spending bars, cashback and fees">
 </p>
+<p>
+  <img src="docs/holdings.png" width="32%" alt="Holdings tab: every position with today's move, weight, value and P/L, then pies">
+  <img src="docs/activity.png" width="32%" alt="Activity tab: day-grouped timeline of trades, card spending and cashback">
+  <img src="docs/insights.png" width="32%" alt="Insights tab: all-time performance, allocation by holding and dividend income">
+</p>
+
+<sub>Screenshots show a fictional demo account (see <a href="#development">Development</a>).</sub>
 
 ## Features
 
@@ -30,13 +38,18 @@ Six display modes, cycled with a **right-click**:
 
 | Tab | What's in it |
 |---|---|
-| **Overview** | Account value split into investments, pot and cash. Today's move. Invested, value, P/L, realized, total return. A graph of **Return**, **Account** or **Invested** over 1W–ALL. US market session, CNN Fear & Greed, EUR/USD. Today's biggest movers. Earnings, ex-dividend and payment dates in the next 3 weeks. Pending orders. |
+| **Overview** | Account value split into investments, pot and cash. Today's move. Invested, value, P/L, realized, total return. A graph of **Return**, **Account** or **Invested** over 1W–ALL. US market session, CNN Fear & Greed, your account currency against the dollar. Today's biggest movers. Earnings, ex-dividend and payment dates in the next 3 weeks. Pending orders. |
 | **Holdings** | Every position with today's move, weight, value and P/L, sortable by value, P/L, P/L %, today or name. Pies with goal progress and current-vs-target slices. **Enter** or click opens a holding's page: price chart (1M–1Y) with your average price marked, 52-week range, your position (cost, shares, opened, FX impact, dividends), company data (sector, market cap, P/E, analyst target, yield, ex-dividend, next earnings and consensus EPS), your trades, and recent headlines. |
 | **Cash** | Spending pot and trading cash. **Spent this month**, with pace against the same day last month, month-end projection and monthly average. Spending per day (30 days) or month (12 months). Cashback, fees, interest, top-ups, withdrawals to the bank. Biggest payments. A weekday pattern. Pot balance over time. |
 | **Activity** | One day-grouped timeline of trades (with realized P/L and fees), dividends, top-ups, card spending, cashback and fees, filterable by kind. |
 | **Insights** | All-in performance: unrealized + realized + dividends, and trading fees paid. Allocation by holding, sector or currency. Concentration (top 1/3/5). Dividend income: last 12 months, this year, projected per year. Trading habits. Fear & Greed with history, and ECB FX rates. |
 
 A **Settings** view (gear, or `,`) holds the account (live/demo), refresh interval, market data on/off, notification rules and the spending heuristic.
+
+<p>
+  <img src="docs/settings.png" width="32%" alt="Settings view: account, refresh interval, market data and notification rules">
+  <img src="docs/setup.png" width="32%" alt="Setup view: paste the API key, pick live or demo">
+</p>
 
 ### Keyboard
 
@@ -111,7 +124,7 @@ rm -rf ~/.local/state/omarchy-trading212             # snapshots, history and ma
 The plugin talks directly to the official [Trading 212 public API](https://docs.trading212.com/api). It supports Invest and Stocks ISA accounts; the API doesn't support CFD.
 
 1. In Trading 212 (app or web), go to **Settings → API (Beta)** and generate an API key.
-   - **Read-only is enough.** This plugin never places orders. To light up every tab, tick **Account, Portfolio, Orders (read), History (orders, dividends, transactions), Pies (read)** and **Metadata**. A feature whose permission is missing just goes dark; Settings lists what's missing.
+   - **Read-only is enough.** This plugin never places orders. To light up every tab, tick **Account, Portfolio, Orders (read), History (orders, dividends, transactions), Pies (read)** and **Metadata**. A feature whose permission is missing just goes dark and says so where it would appear; Settings lists everything that's missing. Without **Account** or **Portfolio** there is nothing to show at all, and the panel says which one to add.
    - Trading 212 recommends restricting the key to your IP.
    - The **secret is shown only once**, at creation. Copy it immediately.
 2. **Left-click the widget** and paste the key into the panel as `KEY:SECRET`. A legacy single-token key also works; paste it as-is. Pick LIVE or DEMO, and hit SAVE.
@@ -176,7 +189,7 @@ Mashing refresh can't trip a 429.
 
 **Failures.** Transient failures (rate limit, network blips, server errors) never replace data you already have: the widget keeps the cached numbers and retries after 15 s. It only shows an error when there's no data at all, or when the key itself is missing or rejected.
 
-**History sync.** The first sync backfills your whole order, dividend and transaction history; later syncs fetch only new pages.
+**History sync.** The first sync backfills your whole order, dividend and transaction history; later syncs fetch only new pages. A very long history (over 2,000 rows of one kind) backfills across several syncs, resuming where the last one stopped.
 
 ## IPC
 
@@ -190,36 +203,46 @@ omarchy-shell io.github.simasrazinskas.trading212 sync            # account hist
 omarchy-shell io.github.simasrazinskas.trading212 cycle           # next display mode
 omarchy-shell io.github.simasrazinskas.trading212 status          # JSON state
 omarchy-shell io.github.simasrazinskas.trading212 summary         # JSON account numbers ({} in privacy mode)
+omarchy-shell io.github.simasrazinskas.trading212 setKey "K:S"   # store a key; prints ok or the reason it didn't
 omarchy-shell io.github.simasrazinskas.trading212 testAlert       # send a test notification
 ```
 
 ## Development
 
 ```sh
-tests/run                      # node unit tests + manifest validation
-omarchy plugin validate .      # manifest only
+tests/run                                # unit tests, manifest, and the QML smoke test
+T212_SKIP_QML=1 tests/run                # just the fast part
+tests/qml-smoke                          # QML smoke test on its own (~45 s)
+QT_SCALE_FACTOR=2 tests/qml-smoke --capture docs   # regenerate the screenshots
+omarchy plugin validate .                # manifest only
 ```
+
+`tests/qml-smoke` boots the real `Service`, `Dashboard` and `Panel` in an offscreen Quickshell against a fictional demo account. It walks every tab, the holding page, settings, setup and the keyboard map, switches live → demo → live, and fails on any QML error, binding loop or broken expectation. It runs in a temporary shell root and state directory, and touches neither the keyring, the network, nor your desktop config.
+
+The demo account comes from `tests/fixtures/demo.js`: nine holdings, a year of orders, dividends and card spending, two pies, market data and six months of daily snapshots, all consistent with each other. Any shell can run on it: with `T212_FIXTURES=<dir>` set, every request is answered from files named after its URL instead of the network (`node tests/fixtures/demo.js <dir> <state-dir>` writes them).
 
 Layout:
 
 ```
-Panel.qml          host: bar label, panel frame, tabs, keyboard map, IPC
+Panel.qml          bar widget host: bar label, settings persistence, popup, IPC
 Service.qml        Trading 212 data layer: summary, positions, pending orders, pies,
                    daily snapshots; composes the services below
 services/          RequestQueue (rate-limited serial runner), StateFile (atomic JSON
                    store), AccountHistory (history sync), MarketData (enrichment),
                    AlertCenter (notifications)
-views/             one file per tab, plus PositionDetail, Settings and Setup
+views/             Dashboard (header, tabs, keyboard map), one file per tab, plus
+                   PositionDetail, Settings and Setup
 components/        Theme, charts (LineChart, BarChart, AllocationBar, RangeBar),
                    ListRow, Stat/StatGrid, Card, Scroller, …
 lib/               pure JavaScript (QML `.pragma library`): Format, T212 parsing,
                    Portfolio math, Cash analysis, Activity timeline, Market parsing,
-                   Bar labels, Alert rules, Icons
-tests/             node --test suites for every lib/ module; harness.js loads the
-                   QML-style scripts, `.import` lines included
+                   Series, Bar labels, Alert rules, Shell commands, Icons
+tests/             node --test suites for every lib/ module (harness.js loads the
+                   QML-style scripts, `.import` lines included), the QML smoke test,
+                   and the demo fixtures
 ```
 
-All logic that can be pure lives in `lib/` and is covered by tests. QML files only wire data to processes and pixels. The shell caches compiled components, so after editing a deployed copy run `omarchy restart shell`.
+All logic that can be pure lives in `lib/` and is covered by tests. Every command the plugin runs is built in `lib/Shell.js`, which passes values only as positional arguments and secrets only over stdin; the suite runs those scripts for real. QML files only wire data to processes and pixels. The shell caches compiled components, so after editing a deployed copy, run `omarchy restart shell`.
 
 ## License
 
