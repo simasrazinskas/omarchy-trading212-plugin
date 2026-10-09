@@ -1,106 +1,63 @@
 import QtQuick
-import QtQuick.Controls
-import QtQuick.Layouts
 import Quickshell
 import Quickshell.Io
 import qs.Commons
 import qs.Ui
-import "Model.js" as Model
+import "components"
+import "views"
+import "lib/Bar.js" as Bar
 
-// Trading 212 bar widget: portfolio numbers in the bar, detail panel on
-// click. Left click toggles the panel, right click cycles the display mode
-// (invested → percent → total → privacy), middle click forces a refresh.
+// Trading 212 bar widget. The bar shows one of six display modes (right
+// click cycles, middle click refreshes); left click opens a tabbed panel:
+// Overview · Holdings · Cash · Activity · Insights, plus Settings.
+//
+// This file is the host: bar label, settings persistence, the popup frame
+// and IPC. The panel's contents are views/Dashboard.qml, data lives in
+// Service.qml, reusable pieces in components/, and all pure logic in lib/
+// (node-tested).
 Panel {
   id: root
   moduleName: "io.github.simasrazinskas.trading212"
   ipcTarget: "io.github.simasrazinskas.trading212"
   manageIpc: false
 
-  readonly property color foreground: bar ? bar.foreground : Color.foreground
-  readonly property color urgent: bar ? bar.urgent : Color.urgent
-  readonly property color profit: Color.accent
-  // Alpha-dimmed rather than darkened: darkening a dark foreground on a
-  // light theme would raise contrast instead of lowering it.
-  readonly property color dim: Qt.alpha(foreground, 0.6)
-  readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
+  readonly property string mode: Bar.normalizeMode(setting("mode", "invested"))
 
-  readonly property string mode: Model.normalizeMode(setting("mode", "invested"))
-
-  // Live value vs the previous day's closing snapshot (or today's opening
-  // value on install day); re-derived whenever history or the summary moves.
-  readonly property var daily: Model.dailyChange(
-    service.history,
-    service.summary ? service.summary.value : null,
-    Qt.formatDate(new Date(), "yyyy-MM-dd"))
+  // Named handles for children, where a bare `service: service` would
+  // resolve to the child's own property rather than the id here.
+  readonly property var dataService: service
+  readonly property var panelTheme: theme
 
   readonly property var barState: ({
     keyMissing: service.keyMissing,
     authFailed: service.authFailed,
     error: service.lastError,
     data: service.summary,
-    daily: daily
+    daily: service.daily,
+    spend: service.spending ? service.spending.thisMonth.spend : null,
+    spendUnavailable: service.missingScopes["history:transactions"] === true
   })
 
-  // Vertical bars have no room for amounts; fall back to a compact badge.
-  readonly property var pieces: {
-    if (button.vertical) {
-      var privacy = Model.barLabel("privacy", barState)
-      return { main: "212", delta: privacy.delta === "▲" || privacy.delta === "▼" ? privacy.delta : "", sign: privacy.sign }
-    }
-    return Model.barLabel(mode, barState)
-  }
+  // Vertical bars have no room for amounts: a compact direction badge.
+  readonly property var pieces: button.vertical ? Bar.verticalLabel(barState) : Bar.label(mode, barState)
 
-  // Bar text stays in the theme's foreground regardless of P/L direction —
-  // the +/- sign carries the direction, and the label is always readable on
-  // any theme. Only the no-data states (setup, loading) dim the delta.
-  readonly property color deltaColor: service.summary ? foreground : dim
-  readonly property bool needsSetup: service.keyMissing || service.authFailed
-  readonly property string symbol: service.summary ? Model.currencySymbol(service.summary.currency) : ""
-
-  // Daily snapshots plus a live "now" point; re-derived whenever history or
-  // the summary changes, so the graph moves with each refresh.
-  readonly property var series: Model.graphSeries(service.history, service.summary ? service.summary.value : null, Date.now())
-
-  function nearestPoint(x, width) {
-    var s = series
-    if (s.points.length < 2) return -1
-    var span = s.lastTs - s.firstTs
-    if (span <= 0) span = 1
-    var best = -1
-    var bestDist = 1e9
-    for (var i = 0; i < s.points.length; i++) {
-      var px = (s.points[i].ts - s.firstTs) / span * (width - 2) + 1
-      var dist = Math.abs(px - x)
-      if (dist < bestDist) {
-        best = i
-        bestDist = dist
-      }
-    }
-    return best
-  }
-
-  readonly property string statusText: {
-    if (service.keyMissing) return "API KEY REQUIRED"
-    if (service.authFailed) return service.lastError.toUpperCase()
-    if (service.refreshing) return "REFRESHING…"
-    if (service.lastError !== "") return service.lastError.toUpperCase()
-    if (service.lastUpdated.getTime() > 0) {
-      var sameDay = Qt.formatDate(service.lastUpdated, "yyyy-MM-dd") === Qt.formatDate(new Date(), "yyyy-MM-dd")
-      var stamp = sameDay ? Qt.formatTime(service.lastUpdated, "HH:mm") : Qt.formatDateTime(service.lastUpdated, "d MMM HH:mm")
-      return service.environment.toUpperCase() + " · " + Model.modeTitle(root.mode).toUpperCase() + " · " + stamp
-    }
-    return "CONNECTING…"
+  Theme {
+    id: theme
+    foreground: root.bar ? root.bar.foreground : Color.foreground
+    urgent: root.bar ? root.bar.urgent : Color.urgent
+    accent: Color.accent
+    fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
   }
 
   function cycleMode() {
-    persistSetting("mode", Model.nextMode(mode))
+    persistSetting("mode", Bar.nextMode(mode))
   }
 
   // Mirrors the clock's format cycling: apply locally for an instant change,
   // then write the same value back through shell.json so it survives shell
-  // restarts. The write is debounced so a burst of right-clicks lands as a
-  // single shell.json update of the final value — the intermediate writes
-  // would otherwise race the bar's settings re-injection.
+  // restarts. The write is debounced so a burst of clicks lands as a single
+  // shell.json update of the final value — intermediate writes would race
+  // the bar's settings re-injection.
   property var _pendingEntry: null
 
   function persistSetting(name, value) {
@@ -124,32 +81,18 @@ Panel {
     }
   }
 
-  function saveCredential() {
-    service.storeCredential(credentialField.text)
-  }
-
-  function plColor(value) {
-    return value >= 0 ? profit : urgent
-  }
-
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
 
   onOpenedChanged: if (opened) {
     service.refreshIfStale()
-    Qt.callLater(function() {
-      if (root.needsSetup) credentialField.forceActiveFocus()
-      else keyCatcher.forceActiveFocus()
-    })
+    Qt.callLater(dashboard.focusInitial)
   }
 
   Service {
     id: service
     settings: root.settings
     panelOpen: root.opened
-    // A successful save clears the field so the secret doesn't linger in the
-    // input; a failed one keeps it for correction.
-    onSavingKeyChanged: if (!savingKey && saveError === "") credentialField.text = ""
   }
 
   IpcHandler {
@@ -159,15 +102,31 @@ Panel {
     function show(): void { root.open() }
     function hide(): void { root.close() }
     function toggle(): void { root.toggle() }
-    function refresh(): string { service.refresh(); return "ok" }
-    function setKey(credential: string): string {
-      var checked = Model.validateCredential(credential)
-      if (!checked.ok) return checked.error
-      service.storeCredential(credential)
-      return "ok"
-    }
+    function refresh(): string { service.refreshAll(); return "ok" }
+    function sync(): string { service.activity.sync(); return "ok" }
+    function setKey(credential: string): string { return service.storeCredential(credential) }
     function cycle(): string { root.cycleMode(); return root.mode }
     function mode(): string { return root.mode }
+    function tab(name: string): string {
+      if (!dashboard.hasTab(name)) return "unknown tab: " + name
+      dashboard.selectTab(name)
+      root.open()
+      return name
+    }
+    function position(ticker: string): string {
+      var wanted = String(ticker).toUpperCase()
+      for (var i = 0; i < service.positions.length; i++) {
+        var p = service.positions[i]
+        if (p.ticker === wanted || p.rawTicker === ticker) {
+          root.open()
+          dashboard.openPosition(p.rawTicker)
+          return p.rawTicker
+        }
+      }
+      return "not held: " + ticker
+    }
+    function settings(): string { root.open(); dashboard.showSettings(true); return "ok" }
+    function testAlert(): string { service.alerts.sendTest(); return "ok" }
     function status(): string {
       return JSON.stringify({
         environment: service.environment,
@@ -178,11 +137,36 @@ Panel {
         refreshing: service.refreshing,
         error: service.lastError,
         updated: service.lastUpdated.getTime() > 0 ? service.lastUpdated.toISOString() : null,
-        positions: service.positions.length
+        positions: service.positions.length,
+        pies: service.pies.length,
+        history: {
+          orders: service.activity.store.orders.length,
+          dividends: service.activity.store.dividends.length,
+          transactions: service.activity.store.transactions.length,
+          syncedAt: service.activity.store.syncedAt > 0 ? new Date(service.activity.store.syncedAt).toISOString() : null
+        },
+        market: {
+          enabled: service.market.enabled,
+          quotes: Object.keys(service.market.quotes).length,
+          paused: service.market.paused
+        },
+        missingScopes: Object.keys(service.missingScopes)
+      })
+    }
+    // Account numbers as JSON, for scripts. Respects privacy mode.
+    function summary(): string {
+      if (root.mode === "privacy" || !service.summary) return "{}"
+      var s = service.summary
+      return JSON.stringify({
+        currency: s.currency, total: s.total, investments: s.value, invested: s.invested, pot: s.pot, cash: s.cash,
+        pl: s.pl, plPct: s.plPct, realized: s.realized,
+        today: service.daily ? { abs: service.daily.abs, pct: service.daily.pct } : null,
+        spentThisMonth: service.spending ? service.spending.thisMonth.spend : null
       })
     }
   }
 
+  // ---- Bar button.
   WidgetButton {
     id: button
     anchors.fill: parent
@@ -191,14 +175,17 @@ Panel {
     hasVisualContent: true
     fixedWidth: vertical ? -1 : labelRow.implicitWidth + scaledHorizontalMargin * 2
     fixedHeight: vertical ? labelRow.implicitHeight + scaledVerticalPadding * 2 : -1
-    tooltipText: Model.tooltip(root.mode, root.barState, service.environment)
+    tooltipText: Bar.tooltip(root.mode, root.barState, service.environment)
 
     onPressed: function(buttonCode) {
       if (buttonCode === Qt.RightButton) root.cycleMode()
-      else if (buttonCode === Qt.MiddleButton) service.refresh()
+      else if (buttonCode === Qt.MiddleButton) service.refreshAll()
       else root.toggle()
     }
 
+    // Bar text stays in the theme's foreground regardless of P/L direction —
+    // the +/- sign carries the direction and the label stays readable on
+    // any theme. Only the no-data states (setup, loading) dim the delta.
     Row {
       id: labelRow
       anchors.centerIn: parent
@@ -208,8 +195,8 @@ Panel {
         visible: text !== ""
         anchors.verticalCenter: parent.verticalCenter
         text: root.pieces.main
-        color: root.foreground
-        font.family: root.fontFamily
+        color: theme.foreground
+        font.family: theme.fontFamily
         font.pixelSize: Style.font.body
         renderType: Text.NativeRendering
       }
@@ -218,516 +205,32 @@ Panel {
         visible: text !== ""
         anchors.verticalCenter: parent.verticalCenter
         text: root.pieces.delta
-        color: root.deltaColor
-        font.family: root.fontFamily
+        color: service.summary ? theme.foreground : theme.dim
+        font.family: theme.fontFamily
         font.pixelSize: Style.font.body
         renderType: Text.NativeRendering
       }
     }
   }
 
+  // ---- Panel.
   KeyboardPanel {
     id: panel
     anchorItem: button
     owner: root
     bar: root.bar
     open: root.opened
-    focusTarget: keyCatcher
-    contentWidth: panel.fittedContentWidth(Style.space(430))
-    contentHeight: panel.fittedContentHeight(fixedContent.implicitHeight + listContent.implicitHeight + Style.space(12), Style.space(640))
+    focusTarget: dashboard.keyCatcher
+    contentWidth: panel.fittedContentWidth(Style.space(500))
+    contentHeight: panel.fittedContentHeight(dashboard.implicitHeight, dashboard.fullHeight)
 
-    PanelKeyCatcher {
-      id: keyCatcher
+    Dashboard {
+      id: dashboard
       anchors.fill: parent
-      blocked: credentialField.activeFocus
-      onCloseRequested: root.close()
-      onTabRequested: function(direction) { root.switchPanel(direction) }
-      onTextKey: function(text) {
-        if (text === "r" || text === "R") service.refresh()
-      }
-
-      ColumnLayout {
-        anchors.fill: parent
-        spacing: Style.space(12)
-
-        Column {
-          id: fixedContent
-          Layout.fillWidth: true
-          spacing: Style.space(12)
-
-          // ---- Hero: title + status line, refresh on the right.
-          Item {
-            width: parent.width
-            implicitHeight: Math.max(heroLabels.implicitHeight, refreshButton.implicitHeight)
-
-            Column {
-              id: heroLabels
-              anchors.left: parent.left
-              anchors.right: refreshButton.left
-              anchors.rightMargin: Style.space(12)
-              anchors.verticalCenter: parent.verticalCenter
-              spacing: Style.space(3)
-
-              Text {
-                text: "Trading 212"
-                color: root.foreground
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.title
-                font.bold: true
-              }
-
-              Text {
-                width: parent.width
-                text: root.statusText
-                color: (service.authFailed || (service.lastError !== "" && !service.refreshing)) ? root.urgent : root.dim
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.bodySmall
-                elide: Text.ElideRight
-              }
-            }
-
-            PanelActionButton {
-              id: refreshButton
-              anchors.right: parent.right
-              anchors.verticalCenter: parent.verticalCenter
-              iconText: service.refreshing ? "󰑓" : "󰑐"
-              foreground: root.foreground
-              fontFamily: root.fontFamily
-              enabled: !service.refreshing
-              onClicked: service.refresh()
-            }
-          }
-
-          // ---- Account summary stats. Flow so a fifth stat wraps to a
-          //      second line instead of overflowing the panel width.
-          Flow {
-            visible: !root.needsSetup && service.summary !== null
-            width: parent.width
-            spacing: Style.space(28)
-
-            Repeater {
-              model: {
-                if (service.summary === null) return []
-                var stats = [
-                  { label: "INVESTED", value: Model.formatFull(service.summary.invested, root.symbol), colored: false },
-                  { label: "VALUE", value: Model.formatFull(service.summary.value, root.symbol), colored: false },
-                  {
-                    label: "P/L",
-                    value: Model.formatSigned(service.summary.pl, root.symbol)
-                      + (service.summary.plPct === null ? "" : "  " + Model.formatPercent(service.summary.plPct)),
-                    colored: true,
-                    sign: service.summary.pl
-                  }
-                ]
-                if (root.daily !== null) stats.push({
-                  label: root.daily.sinceOpen ? "TODAY (SINCE OPEN)" : "TODAY",
-                  value: Model.formatSigned(root.daily.abs, root.symbol)
-                    + (root.daily.pct === null ? "" : "  " + Model.formatPercent(root.daily.pct)),
-                  colored: true,
-                  sign: root.daily.abs
-                })
-                stats.push({ label: "CASH", value: Model.formatFull(service.summary.free, root.symbol), colored: false })
-                return stats
-              }
-
-              Column {
-                required property var modelData
-                spacing: Style.space(5)
-
-                Text {
-                  text: modelData.label
-                  color: root.dim
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.bodySmall
-                  font.letterSpacing: 1
-                }
-                Text {
-                  text: modelData.value
-                  color: modelData.colored ? root.plColor(modelData.sign) : root.foreground
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.body
-                }
-              }
-            }
-          }
-
-          // ---- Portfolio graph from local daily snapshots.
-          Column {
-            visible: !root.needsSetup && service.summary !== null
-            width: parent.width
-            spacing: Style.space(6)
-
-            Item {
-              width: parent.width
-              implicitHeight: graphTitle.implicitHeight
-
-              Text {
-                id: graphTitle
-                anchors.left: parent.left
-                text: "PORTFOLIO"
-                color: root.dim
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.bodySmall
-                font.letterSpacing: 1
-              }
-
-              Text {
-                anchors.right: parent.right
-                visible: root.series.points.length >= 2
-                text: {
-                  var s = root.series
-                  if (chart.hoverIndex >= 0 && chart.hoverIndex < s.points.length) {
-                    var p = s.points[chart.hoverIndex]
-                    var label = p.date === "" ? "NOW" : Qt.formatDate(new Date(p.ts), "d MMM").toUpperCase()
-                    return label + " · " + Model.formatFull(p.value, root.symbol)
-                  }
-                  var pct = s.changePct === null ? "" : " (" + Model.formatPercent(s.changePct) + ")"
-                  return Model.formatSigned(s.changeAbs, root.symbol) + pct
-                    + " · SINCE " + Qt.formatDate(new Date(s.firstTs), "d MMM").toUpperCase()
-                }
-                color: chart.hoverIndex >= 0 ? root.foreground : root.plColor(root.series.changeAbs)
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.bodySmall
-              }
-            }
-
-            Item {
-              width: parent.width
-              height: Style.space(84)
-
-              Canvas {
-                id: chart
-                anchors.fill: parent
-                property int hoverIndex: -1
-
-                onPaint: {
-                  var ctx = getContext("2d")
-                  ctx.clearRect(0, 0, width, height)
-                  var s = root.series
-                  var pts = s.points
-                  if (pts.length < 2) return
-
-                  var padY = 6
-                  var span = s.lastTs - s.firstTs
-                  if (span <= 0) span = 1
-                  var range = s.max - s.min
-                  if (range <= 0) range = Math.max(1, Math.abs(s.max) * 0.01)
-                  function px(ts) { return (ts - s.firstTs) / span * (width - 2) + 1 }
-                  function py(v) { return height - padY - (v - s.min) / range * (height - padY * 2) }
-
-                  var lineColor = s.changeAbs >= 0 ? root.profit : root.urgent
-
-                  ctx.beginPath()
-                  ctx.moveTo(px(pts[0].ts), py(pts[0].value))
-                  for (var i = 1; i < pts.length; i++) ctx.lineTo(px(pts[i].ts), py(pts[i].value))
-                  ctx.lineTo(px(pts[pts.length - 1].ts), height)
-                  ctx.lineTo(px(pts[0].ts), height)
-                  ctx.closePath()
-                  ctx.fillStyle = Qt.rgba(lineColor.r, lineColor.g, lineColor.b, 0.12)
-                  ctx.fill()
-
-                  ctx.beginPath()
-                  ctx.moveTo(px(pts[0].ts), py(pts[0].value))
-                  for (var j = 1; j < pts.length; j++) ctx.lineTo(px(pts[j].ts), py(pts[j].value))
-                  ctx.strokeStyle = lineColor
-                  ctx.lineWidth = 2
-                  ctx.lineJoin = "round"
-                  ctx.stroke()
-
-                  if (hoverIndex >= 0 && hoverIndex < pts.length) {
-                    var hx = px(pts[hoverIndex].ts)
-                    var hy = py(pts[hoverIndex].value)
-                    ctx.strokeStyle = Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.25)
-                    ctx.lineWidth = 1
-                    ctx.beginPath()
-                    ctx.moveTo(hx, 0)
-                    ctx.lineTo(hx, height)
-                    ctx.stroke()
-                    ctx.fillStyle = lineColor
-                    ctx.beginPath()
-                    ctx.arc(hx, hy, 3, 0, Math.PI * 2)
-                    ctx.fill()
-                  }
-                }
-
-                onHoverIndexChanged: requestPaint()
-                onWidthChanged: requestPaint()
-                onHeightChanged: requestPaint()
-                onVisibleChanged: if (visible) requestPaint()
-
-                Connections {
-                  target: root
-                  function onSeriesChanged() { chart.requestPaint() }
-                  function onProfitChanged() { chart.requestPaint() }
-                  function onForegroundChanged() { chart.requestPaint() }
-                  function onUrgentChanged() { chart.requestPaint() }
-                }
-              }
-
-              MouseArea {
-                anchors.fill: parent
-                hoverEnabled: true
-                onPositionChanged: function(mouse) { chart.hoverIndex = root.nearestPoint(mouse.x, chart.width) }
-                onExited: chart.hoverIndex = -1
-              }
-
-              Text {
-                visible: root.series.points.length < 2
-                anchors.centerIn: parent
-                width: parent.width
-                text: "Recording daily snapshots — the graph builds up from here."
-                color: root.dim
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.bodySmall
-                font.italic: true
-                horizontalAlignment: Text.AlignHCenter
-                wrapMode: Text.Wrap
-              }
-            }
-          }
-
-          PanelSeparator {
-            foreground: root.foreground
-          }
-        }
-
-        Flickable {
-          id: panelFlick
-          Layout.fillWidth: true
-          Layout.fillHeight: true
-          contentWidth: width
-          contentHeight: listContent.implicitHeight
-          clip: true
-          boundsBehavior: Flickable.StopAtBounds
-          flickableDirection: Flickable.VerticalFlick
-          interactive: contentHeight > height
-          ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
-
-          Column {
-            id: listContent
-            width: panelFlick.width
-            spacing: Style.space(10)
-
-            // ---- Setup state: paste the API credential straight into the
-            //      panel; it lands in the system keyring over stdin.
-            Column {
-              visible: root.needsSetup
-              width: parent.width
-              spacing: Style.space(10)
-              topPadding: Style.space(8)
-              bottomPadding: Style.space(12)
-
-              Text {
-                width: parent.width
-                text: service.authFailed
-                  ? "The stored API key was rejected. Paste a fresh one below:"
-                  : "Connect your Trading 212 account"
-                color: root.foreground
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.body
-                wrapMode: Text.Wrap
-              }
-
-              Text {
-                visible: !service.authFailed
-                width: parent.width
-                text: "In Trading 212: Settings → API (Beta) → generate a key. Read-only permissions are enough; restricting it to your IP is recommended. Paste it as KEY:SECRET (older single-token keys work too)."
-                color: root.dim
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.bodySmall
-                wrapMode: Text.Wrap
-              }
-
-              Row {
-                spacing: Style.space(6)
-
-                Text {
-                  anchors.verticalCenter: parent.verticalCenter
-                  text: "ACCOUNT"
-                  color: root.dim
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.caption
-                  font.letterSpacing: 1
-                  rightPadding: Style.space(4)
-                }
-
-                Button {
-                  text: "LIVE"
-                  selected: service.environment === "live"
-                  foreground: root.foreground
-                  background: "transparent"
-                  accent: Color.accent
-                  fontFamily: root.fontFamily
-                  fontSize: Style.font.caption
-                  horizontalPadding: Style.space(7)
-                  verticalPadding: Style.space(1)
-                  onClicked: root.persistSetting("environment", "live")
-                }
-
-                Button {
-                  text: "DEMO"
-                  selected: service.environment === "demo"
-                  foreground: root.foreground
-                  background: "transparent"
-                  accent: Color.accent
-                  fontFamily: root.fontFamily
-                  fontSize: Style.font.caption
-                  horizontalPadding: Style.space(7)
-                  verticalPadding: Style.space(1)
-                  onClicked: root.persistSetting("environment", "demo")
-                }
-              }
-
-              Row {
-                width: parent.width
-                spacing: Style.space(8)
-
-                TextField {
-                  id: credentialField
-                  width: parent.width - saveButton.implicitWidth - Style.space(8)
-                  password: true
-                  enabled: !service.savingKey
-                  placeholderText: "Paste API key (KEY:SECRET)"
-                  foreground: root.foreground
-                  font.family: root.fontFamily
-                  onAccepted: root.saveCredential()
-                  Keys.onPressed: function(event) {
-                    if (event.key === Qt.Key_Escape) {
-                      root.close()
-                      event.accepted = true
-                    }
-                  }
-                }
-
-                Button {
-                  id: saveButton
-                  anchors.verticalCenter: parent.verticalCenter
-                  text: service.savingKey ? "SAVING…" : "SAVE"
-                  enabled: !service.savingKey && credentialField.text.trim() !== ""
-                  foreground: root.foreground
-                  background: "transparent"
-                  bordered: true
-                  accent: Color.accent
-                  fontFamily: root.fontFamily
-                  fontSize: Style.font.bodySmall
-                  onClicked: root.saveCredential()
-                }
-              }
-
-              Text {
-                visible: service.saveError !== ""
-                width: parent.width
-                text: service.saveError
-                color: root.urgent
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.bodySmall
-                wrapMode: Text.Wrap
-              }
-
-              Text {
-                width: parent.width
-                text: "The key is stored in the system keyring (gnome-keyring), never in a config file."
-                color: root.dim
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.caption
-                wrapMode: Text.Wrap
-              }
-            }
-
-            // ---- Positions list.
-            Text {
-              visible: !root.needsSetup && !service.positionsLoaded && service.positionsRefreshing
-              width: parent.width
-              text: "Loading positions…"
-              color: root.dim
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.bodySmall
-              font.italic: true
-              topPadding: Style.space(8)
-            }
-
-            Text {
-              visible: !root.needsSetup && service.positionsLoaded && service.positions.length === 0
-              width: parent.width
-              text: "No open positions."
-              color: root.dim
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.body
-              horizontalAlignment: Text.AlignHCenter
-              topPadding: Style.space(12)
-              bottomPadding: Style.space(12)
-            }
-
-            Column {
-              visible: !root.needsSetup && service.positions.length > 0
-              width: parent.width
-              spacing: Style.space(8)
-
-              Repeater {
-                model: service.positions
-
-                Item {
-                  required property var modelData
-                  width: parent.width
-                  implicitHeight: positionLeft.implicitHeight + Style.space(6)
-
-                  Column {
-                    id: positionLeft
-                    anchors.left: parent.left
-                    anchors.right: positionRight.left
-                    anchors.rightMargin: Style.space(12)
-                    anchors.verticalCenter: parent.verticalCenter
-                    spacing: Style.space(2)
-
-                    Text {
-                      width: parent.width
-                      text: modelData.name
-                      color: root.foreground
-                      font.family: root.fontFamily
-                      font.pixelSize: Style.font.body
-                      elide: Text.ElideRight
-                    }
-
-                    Text {
-                      width: parent.width
-                      text: modelData.ticker + " · " + Model.formatQuantity(modelData.quantity) + " @ "
-                        + Model.formatFull(modelData.avgPrice, Model.currencySymbol(modelData.instrumentCurrency))
-                      color: root.dim
-                      font.family: root.fontFamily
-                      font.pixelSize: Style.font.caption
-                      elide: Text.ElideRight
-                    }
-                  }
-
-                  Column {
-                    id: positionRight
-                    anchors.right: parent.right
-                    anchors.verticalCenter: parent.verticalCenter
-                    spacing: Style.space(2)
-
-                    Text {
-                      anchors.right: parent.right
-                      text: Model.formatFull(modelData.value, root.symbol)
-                      color: root.foreground
-                      font.family: root.fontFamily
-                      font.pixelSize: Style.font.body
-                    }
-
-                    Text {
-                      anchors.right: parent.right
-                      text: Model.formatSigned(modelData.pl, root.symbol)
-                        + (modelData.plPct === null ? "" : " (" + Model.formatPercent(modelData.plPct) + ")")
-                      color: root.plColor(modelData.pl)
-                      font.family: root.fontFamily
-                      font.pixelSize: Style.font.caption
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
+      panel: root
+      service: root.dataService
+      theme: root.panelTheme
+      mode: root.mode
     }
   }
 }

@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# Boots the real Service and Dashboard offscreen against the demo fixtures
+# (tests/fixtures/demo.js), walks every view, and fails on any QML error.
+# Uses a temporary shell root and state directory; never touches the
+# keyring, the network, or the desktop's config.
+#
+#   tests/qml-smoke                  # check
+#   tests/qml-smoke --capture DIR    # also save a PNG of every view to DIR
+set -euo pipefail
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+shell_root="${OMARCHY_SHELL_ROOT:-/usr/share/omarchy/shell}"
+capture=""
+if [[ "${1:-}" == "--capture" ]]; then
+  capture="$(mkdir -p "$2" && cd "$2" && pwd)"
+fi
+
+command -v quickshell >/dev/null || { echo "quickshell not found" >&2; exit 1; }
+[[ -d "$shell_root/Commons" ]] || { echo "Omarchy shell not found; set OMARCHY_SHELL_ROOT." >&2; exit 1; }
+
+tmp="$(mktemp -d -t t212-smoke.XXXXXX)"
+trap 'rm -rf "$tmp"' EXIT
+for module in Commons services; do ln -s "$shell_root/$module" "$tmp/$module"; done
+# The shell's Ui module, file by file, with KeyboardPanel swapped for a stub:
+# the real one needs a Wayland layer-shell window, which offscreen lacks.
+mkdir "$tmp/Ui"
+for file in "$shell_root/Ui"/*; do ln -s "$file" "$tmp/Ui/${file##*/}"; done
+ln -sf "$root/tests/stubs/KeyboardPanel.qml" "$tmp/Ui/KeyboardPanel.qml"
+ln -s "$root" "$tmp/plugin"
+cp "$root/tests/qml-smoke.qml" "$tmp/shell.qml"
+node "$root/tests/fixtures/demo.js" "$tmp/fixtures" "$tmp/state"
+
+status=0
+T212_FIXTURES="$tmp/fixtures" XDG_STATE_HOME="$tmp/state" T212_CAPTURE_DIR="$capture" \
+  QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software \
+  timeout 90 quickshell --no-color -p "$tmp/shell.qml" > "$tmp/log" 2>&1 || status=$?
+
+# Only this plugin's own diagnostics count; the shell modules it borrows
+# may log about the desktop they aren't running in.
+rg -v 'file://.*/(Commons|Ui|services)/' "$tmp/log" | rg -v '^\s*$' || true
+if (( status != 0 )); then echo "qml-smoke: quickshell exited with $status" >&2; exit 1; fi
+rg -q SMOKE_OK "$tmp/log" || { echo "qml-smoke: did not finish" >&2; exit 1; }
+if rg -n 'SMOKE_FAILED|ReferenceError|TypeError|Binding loop|Cannot assign|Unable to assign|is not defined|is not a function|Cannot read property|plugin/.*(Error|error)' "$tmp/log" \
+    | rg -v 'file://.*/(Commons|Ui|services)/'; then
+  exit 1
+fi
+echo "qml-smoke: ok"
