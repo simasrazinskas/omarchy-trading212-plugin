@@ -2,10 +2,10 @@
   "schemaVersion": 1,
   "id": "io.github.simasrazinskas.trading212",
   "name": "Trading 212",
-  "version": "0.4.1",
+  "version": "0.5.0",
   "author": "Simas Razinskas",
   "license": "MIT",
-  "description": "Trading 212 portfolio in the Omarchy bar: invested amount and P/L at a glance, with a detail panel of positions.",
+  "description": "Trading 212 portfolio monitor for the Omarchy bar: account value with spending pot, P/L and daily change at a glance; a tabbed panel with holdings, market data, spending, activity, insights and alerts.",
   "kinds": [
     "bar-widget"
   ],
@@ -14,15 +14,22 @@
   },
   "barWidget": {
     "displayName": "Trading 212",
-    "description": "Invested amount and P/L in the bar; left-click for account details and positions, right-click to cycle display modes.",
+    "description": "Account value and P/L in the bar; left-click for Overview · Holdings · Cash · Activity · Insights, right-click to cycle display modes, middle-click to refresh.",
     "category": "Info",
-    "aliases": ["trading212", "t212", "portfolio", "stocks"],
+    "aliases": [
+      "trading212",
+      "t212",
+      "portfolio",
+      "stocks"
+    ],
     "allowMultiple": false,
     "defaultSection": "right",
     "defaults": {
       "refreshIntervalSec": 60,
       "environment": "live",
-      "mode": "invested"
+      "mode": "invested",
+      "marketData": true,
+      "alerts": true
     },
     "schema": [
       {
@@ -33,6 +40,28 @@
         "max": 3600,
         "step": 15,
         "defaultValue": 60
+      },
+      {
+        "key": "environment",
+        "type": "enum",
+        "label": "Account",
+        "options": [
+          "live",
+          "demo"
+        ],
+        "defaultValue": "live"
+      },
+      {
+        "key": "marketData",
+        "type": "boolean",
+        "label": "Public market data (Nasdaq, ECB, CNN, Google News)",
+        "defaultValue": true
+      },
+      {
+        "key": "alerts",
+        "type": "boolean",
+        "label": "Desktop notifications",
+        "defaultValue": true
       }
     ]
   }
