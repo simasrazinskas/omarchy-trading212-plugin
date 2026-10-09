@@ -203,3 +203,24 @@ test("performance and sorting", () => {
   assert.deepEqual(Portfolio.sortPositions(positions, "today", (p) => today[p.ticker]).map((p) => p.ticker), ["AVGO", "NVDA", "VUSA"])
   assert.equal(Portfolio.nextSort("name"), "value")
 })
+
+test("composition splits the total and skips empty parts", () => {
+  const parts = Portfolio.composition(live({ cash: 0.001 }))
+  assert.deepEqual(parts.map((p) => p.key), ["Investments", "Spending pot"])
+  assert.ok(Math.abs(parts[0].weight - 1050 / 1155 * 100) < 1e-9)
+  assert.deepEqual(Portfolio.composition(null), [])
+  assert.deepEqual(Portfolio.composition(live({ total: 0 })), [])
+})
+
+test("potSeries: recorded pot days, live point replaces today", () => {
+  const now = new Date(2026, 8, 20, 15).getTime()
+  const history = Portfolio.parseHistory([
+    '{"date":"2026-09-18","ts":' + Math.round((now - 2 * DAY) / 1000) + ',"value":1,"cash":5,"pot":null}',
+    '{"date":"2026-09-19","ts":' + Math.round((now - DAY) / 1000) + ',"value":1,"cash":5,"pot":90}',
+    '{"date":"2026-09-20","ts":' + Math.round((now - 3600000) / 1000) + ',"value":1,"cash":5,"pot":95}'
+  ].join("\n"))
+  const s = Portfolio.potSeries(history, live(), now)
+  assert.deepEqual(s.points.map((p) => p.value), [95, 105])
+  assert.equal(s.changeAbs, 10)
+  assert.equal(Portfolio.potSeries(history, null, now).points.length, 2)
+})

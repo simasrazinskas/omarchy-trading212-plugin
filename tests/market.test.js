@@ -73,25 +73,37 @@ test("parseEarnings extracts the date and consensus EPS", () => {
   assert.equal(e.epsForecast, 2.47)
 })
 
-test("parseChart and chartSeries", () => {
+test("parseChart and chartWindow", () => {
   const c = Market.parseChart(JSON.stringify({ data: { previousClose: "$225.07", chart: [{ x: 2000, y: 110 }, { x: 1000, y: 100 }, { x: 3000, y: "bad" }] } }), now)
   assert.deepEqual(c.points, [{ ts: 1000, value: 100 }, { ts: 2000, value: 110 }])
   assert.equal(c.previousClose, 225.07)
-  const s = Market.chartSeries(c, 120, 5000)
+  const s = Market.chartWindow(c, "1Y", 120, 5000)
   assert.equal(s.points.length, 3)
   assert.equal(s.changePct, 20)
-  assert.equal(Market.chartSeries(null, 1, 1).points.length, 0)
+  assert.equal(Market.chartWindow(null, "1Y", 1, 1).points.length, 0)
+  // The window drops closes older than the range; the live point only
+  // follows a newer close.
+  const day = 86400000
+  const year = { points: [{ ts: now - 200 * day, value: 50 }, { ts: now - 20 * day, value: 100 }, { ts: now - day, value: 110 }] }
+  assert.equal(Market.chartWindow(year, "1M", 121, now).points.length, 3)
+  assert.equal(Market.chartWindow(year, "1Y", 121, now).points.length, 4)
+  assert.equal(Market.chartWindow(year, "1M", null, now).points.length, 2)
   assert.equal(Market.rangePosition(150, 100, 200), 0.5)
   assert.equal(Market.rangePosition(250, 100, 200), 1)
   assert.equal(Market.rangePosition(1, null, 2), null)
 })
 
-test("FX conversion into the base currency", () => {
+test("FX conversion between any two currencies through the base", () => {
   const fx = Market.parseFx(JSON.stringify({ base: "EUR", date: "2026-09-28", rates: { USD: 1.25, GBP: 0.8 } }), now)
-  assert.equal(Market.toBase(125, "USD", fx), 100)
-  assert.equal(Market.toBase(8000, "GBX", fx), 100)
-  assert.equal(Market.toBase(5, "EUR", fx), 5)
-  assert.equal(Market.toBase(5, "JPY", fx), null)
+  assert.equal(Market.convert(125, "USD", "EUR", fx), 100)
+  assert.equal(Market.convert(8000, "GBX", "EUR", fx), 100)
+  assert.equal(Market.convert(5, "EUR", "EUR", fx), 5)
+  assert.equal(Market.convert(5, "JPY", "EUR", fx), null)
+  assert.ok(Math.abs(Market.convert(125, "USD", "GBP", fx) - 80) < 1e-9)
+  assert.equal(Market.convert(7, "USD", "usd", null), 7)
+  assert.equal(Market.convert(7, "USD", "EUR", null), null)
+  assert.equal(Market.crossRate("EUR", "USD", fx), 1.25)
+  assert.ok(Math.abs(Market.crossRate("GBP", "USD", fx) - 1.5625) < 1e-9)
 })
 
 test("parseFearGreed and moodLabel", () => {
@@ -122,10 +134,12 @@ test("upcomingEvents, projectedIncome and market status", () => {
   const events = Market.upcomingEvents(positions, profiles, earnings, now, 60)
   assert.deepEqual(events.map((e) => e.kind), ["exdiv", "earnings"])
   assert.equal(Market.upcomingEvents(positions, profiles, earnings, now, 7).length, 1)
-  const fx = { base: "EUR", rates: { USD: 1.25 } }
-  const income = Market.projectedIncome(positions, profiles, fx)
+  const fx = { base: "EUR", rates: { USD: 1.25, GBP: 0.8 } }
+  const income = Market.projectedIncome(positions, profiles, fx, "EUR")
   assert.ok(Math.abs(income.total - 0.32) < 1e-9)
   assert.equal(income.payers, 1)
+  // A GBP account gets pounds, not the table's euros.
+  assert.ok(Math.abs(Market.projectedIncome(positions, profiles, fx, "GBP").total - 0.256) < 1e-9)
   assert.equal(Market.usMarketStatus({ A: { marketStatus: "Closed", fetchedAt: 1 }, B: { marketStatus: "Open", fetchedAt: 2 } }), "Open")
   assert.equal(Market.isStale(null, 1000, now), true)
   assert.equal(Market.isStale({ fetchedAt: now - 10 }, 1000, now), false)

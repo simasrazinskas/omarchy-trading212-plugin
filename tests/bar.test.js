@@ -77,3 +77,10 @@ test("data tooltip includes account split, P/L, today and spend", () => {
   assert.ok(text.includes("Today +€12.40 (+0.5%)"))
   assert.ok(text.includes("Spent this month €234.50"))
 })
+
+test("spend mode distinguishes loading from unavailable", () => {
+  const data = { currency: "EUR", value: 1, pl: 0, plPct: 0, total: 1 }
+  assert.equal(Bar.label("spend", { data }).delta, "…")
+  assert.equal(Bar.label("spend", { data, spendUnavailable: true }).delta, "—")
+  assert.equal(Bar.label("spend", { data, spend: 42.5 }).delta, "€42.50")
+})

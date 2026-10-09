@@ -66,3 +66,19 @@ test("dividendStats, tradingStats, forTicker", () => {
   assert.equal(Activity.forTicker(store.orders, "X_US_EQ", 0).length, 0)
   assert.equal(Activity.forTicker(store.orders, "NVDA_US_EQ", 0).length, 1)
 })
+
+test("parseStore keeps backfill cursors and drops junk ones", () => {
+  const store = Activity.parseStore(JSON.stringify({ orders: [], cursors: { orders: "/api/v0/x?cursor=9", dividends: "", transactions: 5 } }))
+  assert.deepEqual(store.cursors, { orders: "/api/v0/x?cursor=9" })
+  assert.deepEqual(Activity.parseStore("junk").cursors, {})
+})
+
+test("only sells carry realized P/L in the timeline", () => {
+  const store = Activity.emptyStore()
+  store.orders = [
+    { id: "b", filled: true, side: "BUY", ticker: "A", rawTicker: "A_US_EQ", quantity: 1, price: 1, value: 1, realized: 0, fees: 0, time: 2 },
+    { id: "s", filled: true, side: "SELL", ticker: "A", rawTicker: "A_US_EQ", quantity: 1, price: 2, value: 2, realized: 1, fees: 0, time: 1 }
+  ]
+  const rows = Activity.timeline(store, "trades", null, 0)
+  assert.deepEqual(rows.map((r) => r.realized), [null, 1])
+})

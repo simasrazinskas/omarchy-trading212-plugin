@@ -84,3 +84,27 @@ test("date helpers bucket by local calendar day", () => {
   assert.equal(Format.age(now - 5 * 60000, now), "5m")
   assert.equal(Format.age(now - 3 * 3600000, now), "3h")
 })
+
+test("money rounds to cents before choosing a sign or a unit", () => {
+  assert.equal(Format.formatFull(-0.004, "€"), "€0.00")
+  assert.equal(Format.formatSigned(-0.004, "€"), "+€0.00")
+  assert.equal(Format.formatBarSigned(-0.001, "€"), "+€0.00")
+  assert.equal(Format.formatBar(99.996, "€"), "€100")
+  assert.equal(Format.formatBar(999999.6, "€"), "€1M")
+  assert.equal(Format.formatBar(999949, "€"), "€999.9k")
+  assert.equal(Format.formatBar(-1234567, "€"), "-€1.23M")
+})
+
+test("formatPercent signs by the rounded figure", () => {
+  assert.equal(Format.formatPercent(-0.001), "+0.00%")
+  assert.equal(Format.formatPercent(-0.04), "-0.04%")
+  assert.equal(Format.formatPercent(0), "+0.0%")
+  assert.equal(Format.formatPercent(NaN), "")
+})
+
+test("letter currency symbols never run into the digits", () => {
+  assert.equal(Format.formatFull(1234.5, Format.currencySymbol("GBX")), "GBX 1,234.50")
+  assert.equal(Format.formatFull(10, Format.currencySymbol("SEK")), "kr 10.00")
+  assert.equal(Format.formatCompact(1690000000000), "1.69T")
+  assert.equal(Format.formatCompact(812000000000), "812B")
+})
